@@ -339,6 +339,9 @@ export const createMockMint = async (options = {}) => {
       const h2 = q.get('h2')
 
       if (k1s.length === 0) return fail('Missing k1.')
+      // a repeated k1 would count one note's value twice into the output -
+      // refused atomically, as the reference mint does
+      if (new Set(k1s).size !== k1s.length) return fail('Invalid or already spent k1.')
       if (pr && k1s.length > 1) return fail('pr must not be combined with multiple k1.')
       if (pr && amountRaw) return fail('pr must not be combined with amount.')
 
@@ -404,6 +407,19 @@ export const createMockMint = async (options = {}) => {
       if (amountRaw !== null && !h2) return fail('missing h2')
       if (!/^[0-9a-f]{64}$/.test(h)) return fail('missing h')
       if (h2 && !/^[0-9a-f]{64}$/.test(h2)) return fail('missing h2')
+      // One id cannot carry two notes, and an id already in use - as a note
+      // in any state, or as a mint invoice's payment hash - must never be
+      // minted over: the invoice case points a future payer's money at a
+      // stranger's note (its /verify serves the preimage that IS the k1 of
+      // whatever sits under that id), and a burned note's id has a preimage
+      // every previous holder still knows. Refused with the same reason as
+      // any dead k1, so a probe learns nothing about which ids exist.
+      if (h2 && h2 === h) return fail('Invalid or already spent k1.')
+      for (const outputId of h2 ? [h, h2] : [h]) {
+        if (notes.has(outputId) || invoices.has(outputId)) {
+          return fail('Invalid or already spent k1.')
+        }
+      }
 
       // split
       if (amountRaw !== null) {

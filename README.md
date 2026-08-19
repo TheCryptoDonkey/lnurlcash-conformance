@@ -129,8 +129,13 @@ checks that the informational GET is idempotent and echoes the queried
 `k1`, that the URL's own `amount` is ignored, that a rotate with no `h` is
 refused, that a rotate returns no secret, that signatures verify against the
 advertised `mintPubkey`, that split and merge conserve value, and that a
-burned secret cannot be replayed. Use a small note. Exit code is non-zero if
-anything failed.
+burned secret cannot be replayed. It also probes three adversarial shapes a
+mint must refuse atomically: a duplicated `k1` (which a careless mint counts
+twice, minting money from nothing), an output hash that collides with an
+existing note id (minting over it hands the output to whoever already knows
+that id's preimage), and a split whose `h` equals `h2` (one id cannot carry
+two notes). After every refusal it confirms the refused note is still
+spendable. Use a small note. Exit code is non-zero if anything failed.
 
 The grader shares no code with any LNURLcash library — it is written against
 `fetch` and `@noble` directly. A grader that shared an implementation with

@@ -329,6 +329,89 @@ export const gradeNote = async (noteUrl, report) => {
     return 'verified offline'
   })
 
+  // The still-alive probe the three adversarial checks below share: a
+  // compliant refusal is ATOMIC, so the note it refused to touch must
+  // still be spendable afterwards.
+  const assertStillLive = async () => {
+    const check = new URL(url)
+    check.searchParams.set('k1', current)
+    const still = await get(check)
+    assert(still.status !== 'ERROR', `the refusal burned the note anyway: ${still.reason}`)
+  }
+
+  await report.check('refuses a duplicated k1', async () => {
+    // One note named twice in a merge-shaped request. Counting its value
+    // twice into the output creates money from nothing.
+    const fresh = bytesToHex(randomBytes(32))
+    const cb = new URL(info.callback)
+    cb.searchParams.append('k1', current)
+    cb.searchParams.append('k1', current)
+    cb.searchParams.append('h', noteId(fresh))
+    const body = await get(cb)
+    if (body.status === 'OK') {
+      // the mutation landed - adopt the output first, so later checks keep
+      // pointing at live money whatever the verdict
+      current = fresh
+      currentSig = body.sig ?? null
+      const after = new URL(url)
+      after.searchParams.set('k1', fresh)
+      const output = await get(after)
+      assert(
+        output.maxWithdrawable !== info.maxWithdrawable * 2,
+        'a duplicated k1 was counted twice - the output is worth double the note'
+      )
+      throw soft(
+        `accepted a duplicated k1 (deduplicated to ${output.maxWithdrawable} msat) - an atomic refusal is the safer answer`
+      )
+    }
+    await assertStillLive()
+    return body.reason
+  })
+
+  await report.check('refuses an output hash that already names a note', async () => {
+    // The original note's id is a known existing (burned) id. Minting over
+    // an existing id hands the output to whoever knows its preimage - here,
+    // every previous holder of the original note.
+    const cb = new URL(info.callback)
+    cb.searchParams.append('k1', current)
+    cb.searchParams.append('h', noteId(k1))
+    const body = await get(cb)
+    if (body.status === 'OK') {
+      // the output's secret IS the original k1 - adopt it and say so
+      current = k1
+      currentSig = body.sig ?? null
+      throw new Error(
+        'minted over an existing note id - the output is spendable with a secret every previous holder already knows'
+      )
+    }
+    await assertStillLive()
+    return body.reason
+  })
+
+  await report.check('refuses a split whose h equals h2', async () => {
+    const half = Math.floor(info.maxWithdrawable / 2)
+    if (half < 1) throw soft('note too small to attempt')
+    const twin = bytesToHex(randomBytes(32))
+    const cb = new URL(info.callback)
+    cb.searchParams.append('k1', current)
+    cb.searchParams.append('amount', String(half))
+    cb.searchParams.append('h', noteId(twin))
+    cb.searchParams.append('h2', noteId(twin))
+    const body = await get(cb)
+    if (body.status === 'OK') {
+      current = twin
+      currentSig = body.sig ?? null
+      const after = new URL(url)
+      after.searchParams.set('k1', twin)
+      const output = await get(after)
+      throw new Error(
+        `accepted h2 equal to h - one id now carries ${output.maxWithdrawable ?? 'nothing'} msat of what should be two notes`
+      )
+    }
+    await assertStillLive()
+    return body.reason
+  })
+
   await report.check('split conserves value', async () => {
     const half = Math.floor(info.maxWithdrawable / 2)
     if (half < 1) throw soft('note too small to split')

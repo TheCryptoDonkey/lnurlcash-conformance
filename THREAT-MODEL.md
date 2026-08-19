@@ -53,6 +53,14 @@ including asking for an invoice. That is a request a mint may log or rate-limit.
 anywhere, http only for loopback and `.onion` — applies here, so a grader run
 cannot be redirected onto a plaintext connection carrying a note secret.
 
+**Its spend mode probes adversarial shapes on purpose.** A duplicated `k1`, an
+output hash that collides with an existing note id, and a split whose `h`
+equals `h2` are all sent to the service under grade, expecting atomic
+refusals. A compliant mint refuses and the note is untouched (the grader
+confirms this after every refusal); a non-compliant one has just demonstrated
+a fund-inflation or note-planting defect on the note the operator chose to
+spend — which is exactly what the flag consented to.
+
 ## What these vectors do not cover
 
 **They are not a security audit.** They check that an implementation agrees

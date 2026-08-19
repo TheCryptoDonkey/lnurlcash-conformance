@@ -1104,6 +1104,27 @@ const lifecycle = {
       steps: ['merge', 'informational GET on the new note', 'rotate'],
       requirement:
         'neither response carries the output amount, and a fee-charging SERVICE may have deducted from a split\'s change or refunded into a merge\'s result. The authoritative value comes from the informational GET, and that GET puts k1 on the wire, so a rotate should follow.'
+    },
+    {
+      name: 'a duplicated k1',
+      steps: ['merge with the same k1 given twice', 'observe the refusal'],
+      requirement:
+        'a SERVICE MUST refuse a mutation that names the same k1 more than once, atomically and before burning anything - counting one note\'s value twice into a merge or split output creates money from nothing. The reference mint refuses (inside its transaction, the second burn of a duplicate finds the first already spent it, and everything rolls back); a SERVICE that instead deduplicates and proceeds at the note\'s true value conserves funds only by accident, and the grader marks it with a warning rather than a pass.'
+    },
+    {
+      name: 'an output hash already in use',
+      steps: [
+        'rotate with h set to the id of an existing note, or to the payment hash of an invoice the SERVICE issued',
+        'observe the refusal'
+      ],
+      requirement:
+        'a SERVICE MUST refuse h/h2 values that collide with any note id it has ever minted or any invoice payment hash it has ever issued, before burning anything. Minting over an existing id hands the output to whoever already knows that id\'s preimage - for a pending mint invoice that is its future payer, and for a burned note it is every previous holder - or it bricks a paid mint whose settlement can no longer register under that key. A WALLET drawing fresh 32-byte secrets never collides honestly, so a collision is always adversarial. Refuse with the same reason as any dead k1: which table the id collided with is an oracle nobody is owed.'
+    },
+    {
+      name: 'a split into the same hash twice',
+      steps: ['split with h2 equal to h', 'observe the refusal'],
+      requirement:
+        'a SERVICE MUST refuse a split whose two output hashes are equal - one id cannot carry two notes, so accepting it either destroys the change or double-mints a single id.'
     }
   ]
 }
