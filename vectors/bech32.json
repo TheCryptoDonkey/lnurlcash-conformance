@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "spec": "LUD-01",
+  "description": "bech32 encoding of LNURLs. The hrp is \"lnurl\"; the limit is raised well above bech32 default because a note URL carrying k1, amount and sig is long.",
+  "encode": [
+    {
+      "url": "https://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "lnurl": "LNURL1DP68GURN8GHJ7MTFDE6ZUETCV9KHQMR99AMN76E384SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPUYQ9Q2"
+    },
+    {
+      "url": "https://mint.example/.well-known/lnurlp/mint",
+      "lnurl": "LNURL1DP68GURN8GHJ7MTFDE6ZUETCV9KHQMR99UH8WETVDSKKKMN0WAHZ7MRWW4EXCUP0D45KUAQNY2AVS"
+    },
+    {
+      "url": "https://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&amount=21000",
+      "lnurl": "LNURL1DP68GURN8GHJ7MTFDE6ZUETCV9KHQMR99AMN76E384SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPYESK6MM4DE6R6V33XQCRQS9E9F4"
+    },
+    {
+      "url": "http://localhost:8000/w?k1=0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+      "lnurl": "LNURL1DP68GUP69UHKCMMRV9KXSMMNWSARSVPSXQHHW0MTXY7NQE3SVCCXVVRXXPNRQE3SVCCXVVRXXPNRQE3SVCCXVVRXXPNRQE3SVCCXVVRXXPNRQE3SVCCXVVRXXPNRQE3SVCCXVVRXXPNRQE3SVC8K56PK"
+    }
+  ],
+  "decodeInvalid": [
+    {
+      "input": "",
+      "why": "empty"
+    },
+    {
+      "input": "LNURL1",
+      "why": "no data part"
+    },
+    {
+      "input": "https://mint.example/w",
+      "why": "not bech32 at all"
+    },
+    {
+      "input": "LNURL1DP68GURN8GHJ7MTFDE6ZUETCV9KHQMR99AMST60YTq",
+      "why": "checksum corrupted"
+    },
+    {
+      "input": "LNBC1QQQQ",
+      "why": "wrong hrp"
+    }
+  ],
+  "caseInsensitive": {
+    "note": "bech32 is case-insensitive; a decoder must accept either casing and produce the same URL",
+    "lower": "lnurl1dp68gurn8ghj7mtfde6zuetcv9khqmr99amst60ytl",
+    "upper": "LNURL1DP68GURN8GHJ7MTFDE6ZUETCV9KHQMR99AMST60YTL",
+    "url": "https://mint.example/w"
+  }
+}

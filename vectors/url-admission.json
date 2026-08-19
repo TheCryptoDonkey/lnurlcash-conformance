@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "spec": "LUD-25 draft (lnurl/luds#301)",
+  "description": "Which URLs an implementation may fetch. Applies to every URL, whether scanned/pasted by a user or handed over by a SERVICE in its own response (callback, verify, payLink). https always; http only for loopback and .onion. Anything else is refused, so a crafted note cannot answer its own informational GET (a data: URL carrying withdrawRequest JSON would otherwise mint a self-contained fake note) and a SERVICE cannot redirect a k1-bearing callback onto cleartext.",
+  "allowed": [
+    "https://mint.example/w",
+    "https://mint.example:8443/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "http://localhost:8000/w",
+    "http://127.0.0.1:8000/w",
+    "http://0.0.0.0:8000/w",
+    "http://mint.onion/w",
+    "http://sub.domain.onion/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ],
+  "rejected": [
+    {
+      "url": "http://mint.example/w",
+      "why": "cleartext to a clearnet host"
+    },
+    {
+      "url": "data:application/json,{\"tag\":\"withdrawRequest\"}",
+      "why": "data: URL - a note that answers itself"
+    },
+    {
+      "url": "file:///etc/passwd",
+      "why": "file: URL"
+    },
+    {
+      "url": "javascript:alert(1)",
+      "why": "javascript: URL"
+    },
+    {
+      "url": "ftp://mint.example/w",
+      "why": "unsupported scheme"
+    },
+    {
+      "url": "not a url at all",
+      "why": "unparseable"
+    },
+    {
+      "url": "",
+      "why": "empty"
+    }
+  ]
+}

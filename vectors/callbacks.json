@@ -1,0 +1,232 @@
+{
+  "version": 1,
+  "spec": "LUD-25 draft (lnurl/luds#301)",
+  "description": "The mutating callback. Every operation is a GET on the `callback` from the note's own withdrawRequest response. `h`/`h2` are hashes of secrets the WALLET generates - never the SERVICE - so the SERVICE never sees, generates or persists a replacement note's spend secret. Query parameter ORDER is not significant; the expected query below is one valid serialisation and implementations should compare parsed parameters, honouring repeats.",
+  "cases": [
+    {
+      "name": "melt",
+      "op": "melt",
+      "callback": "https://mint.example/w/cb",
+      "params": {
+        "k1": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "pr": "lnbc210n1pjqrstuvwxyz"
+      },
+      "expectQuery": [
+        [
+          "k1",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        [
+          "pr",
+          "lnbc210n1pjqrstuvwxyz"
+        ]
+      ]
+    },
+    {
+      "name": "rotate",
+      "op": "rotate",
+      "callback": "https://mint.example/w/cb",
+      "params": {
+        "k1": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "h": "4ca14526b2751b640d549ce7caf8ac39438592211a0ec370064d57666a682ad6"
+      },
+      "expectQuery": [
+        [
+          "k1",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        [
+          "h",
+          "4ca14526b2751b640d549ce7caf8ac39438592211a0ec370064d57666a682ad6"
+        ]
+      ]
+    },
+    {
+      "name": "split one note",
+      "op": "split",
+      "callback": "https://mint.example/w/cb",
+      "params": {
+        "k1": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "amountMsat": 5000,
+        "h": "4ca14526b2751b640d549ce7caf8ac39438592211a0ec370064d57666a682ad6",
+        "h2": "9b68d49bb092f71292ad76ab8fb8750d710aae5af70e43b8ec0a901d048c0030"
+      },
+      "expectQuery": [
+        [
+          "k1",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        [
+          "amount",
+          "5000"
+        ],
+        [
+          "h",
+          "4ca14526b2751b640d549ce7caf8ac39438592211a0ec370064d57666a682ad6"
+        ],
+        [
+          "h2",
+          "9b68d49bb092f71292ad76ab8fb8750d710aae5af70e43b8ec0a901d048c0030"
+        ]
+      ]
+    },
+    {
+      "name": "split several notes at once",
+      "op": "split",
+      "callback": "https://mint.example/w/cb",
+      "params": {
+        "k1": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ],
+        "amountMsat": 5000,
+        "h": "9b68d49bb092f71292ad76ab8fb8750d710aae5af70e43b8ec0a901d048c0030",
+        "h2": "e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e"
+      },
+      "expectQuery": [
+        [
+          "k1",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        [
+          "k1",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ],
+        [
+          "amount",
+          "5000"
+        ],
+        [
+          "h",
+          "9b68d49bb092f71292ad76ab8fb8750d710aae5af70e43b8ec0a901d048c0030"
+        ],
+        [
+          "h2",
+          "e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e"
+        ]
+      ],
+      "why": "LUD-25 allows one or many k1 on a split - no prior merge required"
+    },
+    {
+      "name": "merge",
+      "op": "merge",
+      "callback": "https://mint.example/w/cb",
+      "params": {
+        "k1": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"
+        ],
+        "h": "e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e"
+      },
+      "expectQuery": [
+        [
+          "k1",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        [
+          "k1",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ],
+        [
+          "k1",
+          "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"
+        ],
+        [
+          "h",
+          "e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e"
+        ]
+      ],
+      "why": "k1 repeats rather than being comma-joined: append, never set"
+    },
+    {
+      "name": "callback that already carries query parameters",
+      "op": "rotate",
+      "callback": "https://mint.example/w/cb?token=abc",
+      "params": {
+        "k1": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "h": "4ca14526b2751b640d549ce7caf8ac39438592211a0ec370064d57666a682ad6"
+      },
+      "expectQuery": [
+        [
+          "token",
+          "abc"
+        ],
+        [
+          "k1",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        [
+          "h",
+          "4ca14526b2751b640d549ce7caf8ac39438592211a0ec370064d57666a682ad6"
+        ]
+      ],
+      "why": "existing parameters must be preserved, not overwritten"
+    }
+  ],
+  "rejected": [
+    {
+      "name": "melt with several k1",
+      "op": "melt",
+      "params": {
+        "k1": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ],
+        "pr": "lnbc210n1pjq"
+      },
+      "why": "LUD-25: pr MUST NOT be combined with multiple k1. Merge first, then melt."
+    },
+    {
+      "name": "melt with an amount",
+      "op": "melt",
+      "params": {
+        "k1": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "pr": "lnbc210n1pjq",
+        "amountMsat": 5000
+      },
+      "why": "LUD-25: pr MUST NOT be combined with amount"
+    },
+    {
+      "name": "rotate without h",
+      "op": "rotate",
+      "params": {
+        "k1": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ]
+      },
+      "why": "h is required whenever pr is absent - a SERVICE must never generate the secret"
+    },
+    {
+      "name": "split without h2",
+      "op": "split",
+      "params": {
+        "k1": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "amountMsat": 5000,
+        "h": "4ca14526b2751b640d549ce7caf8ac39438592211a0ec370064d57666a682ad6"
+      },
+      "why": "h2 is required whenever amount is present"
+    },
+    {
+      "name": "no k1 at all",
+      "op": "rotate",
+      "params": {
+        "k1": [],
+        "h": "4ca14526b2751b640d549ce7caf8ac39438592211a0ec370064d57666a682ad6"
+      },
+      "why": "nothing to burn"
+    }
+  ]
+}

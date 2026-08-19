@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "spec": "LUD-25 draft (lnurl/luds#301)",
+  "description": "The state machine a holder must implement, and the transitions that are fund-critical. These are behavioural requirements rather than pure functions, so they are expressed as scenarios the mock mint can drive.",
+  "states": [
+    "pending",
+    "confirmed",
+    "spent"
+  ],
+  "scenarios": [
+    {
+      "name": "mint then rotate",
+      "steps": [
+        "pay the payRequest invoice",
+        "the preimage is the k1",
+        "rotate immediately"
+      ],
+      "requirement": "a WALLET MUST rotate straight after claiming a minted note: the SERVICE generated that preimage and is a permanent prior holder of it. Anyone who saw the unpaid invoice can poll LUD-21 verify and race for it."
+    },
+    {
+      "name": "melt is not settlement",
+      "steps": [
+        "melt",
+        "receive OK",
+        "observe the note still reserved"
+      ],
+      "requirement": "OK on a melt means the payment is in flight. The note MUST NOT be treated as confirmed spent until settlement, and a failed payment restores it to outstanding. A holder locking it optimistically must be able to unlock on a confirmed failure."
+    },
+    {
+      "name": "pending lockout",
+      "steps": [
+        "melt k1",
+        "attempt a rotate on the same k1 before settlement"
+      ],
+      "requirement": "the second call fails with reason \"pending\" and MUST be retried, never read as spent"
+    },
+    {
+      "name": "ambiguous rotate",
+      "steps": [
+        "rotate",
+        "the connection drops before a response"
+      ],
+      "requirement": "the fresh secret MUST be preserved, because the SERVICE may have minted it. Probe the input k1 with an informational GET: still live means the request never landed and the secret can be dropped; spent or unknown means the burn landed and the preserved secret is the only remaining money; a failed probe means keep everything."
+    },
+    {
+      "name": "ambiguous split",
+      "steps": [
+        "split",
+        "the response is unparseable"
+      ],
+      "requirement": "BOTH fresh secrets must be preserved, in output order: the split-off note first, then the change"
+    },
+    {
+      "name": "a retried mutation",
+      "steps": [
+        "rotate",
+        "the connection drops after the SERVICE applied it",
+        "the HTTP stack silently resends the identical request"
+      ],
+      "requirement": "a WALLET MUST ensure its HTTP stack does not retry a mutating callback. Every mutation is a GET, HTTP treats GET as idempotent, and an LNURLcash mutation is not: the first attempt burns the input. A retried mutation is answered \"invalid or already spent k1\", which classifies as a DEFINITIVE rejection - so the WALLET concludes nothing happened and discards the fresh secret that was the only copy of the note the SERVICE just minted. This is not hypothetical: it was found in two independent implementations during this suite's own development. Java's java.net.http.HttpClient retries idempotent GETs on a mid-flight connection reset and cannot be configured out of it (use a client that can); Go's net/http retries when the request went over a REUSED connection, and a client with no explicit Transport shares a process-wide pool, so the behaviour depends on what unrelated code did first (disable keep-alives). Browsers retry on a stale pooled connection for the same reason. Test this deliberately: the mock mint's dropAfterMutation mode reproduces it."
+    },
+    {
+      "name": "settle a merge or split output",
+      "steps": [
+        "merge",
+        "informational GET on the new note",
+        "rotate"
+      ],
+      "requirement": "neither response carries the output amount, and a fee-charging SERVICE may have deducted from a split's change or refunded into a merge's result. The authoritative value comes from the informational GET, and that GET puts k1 on the wire, so a rotate should follow."
+    }
+  ]
+}

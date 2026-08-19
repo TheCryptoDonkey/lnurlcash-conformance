@@ -1,0 +1,322 @@
+{
+  "version": 1,
+  "spec": "LUD-25 draft (lnurl/luds#301)",
+  "description": "Optional mint fees (LUD-25). A SERVICE advertises what it withholds on minting via an extra [\"text/plain\", \"Mint fees: <base_fee_msat>,<fee_percent_ppm>\"] entry in the payRequest metadata, so a WALLET can warn the payer that the note it ends up holding is worth less than the invoice it paid. A SERVICE that omits the entry is fee-free, not unknown.",
+  "formula": {
+    "apply": "max(0, gross - base_fee_msat - floor(gross * fee_percent_ppm / 1_000_000))",
+    "grossUp": "the smallest gross for which apply(gross) == net",
+    "overflowWarning": "compute the proportional term as floor(gross/1e6)*ppm + floor((gross%1e6)*ppm/1e6). A direct gross*ppm overflows 64-bit unsigned at realistic amounts (2.1e15 msat is 21M BTC; times 999999 ppm is ~2.1e21, past the 1.8e19 limit).",
+    "minimality": "grossUp must return the exact minimum. A linear estimate followed by a one-msat walk is unbounded for a near-100% fee - about a million steps at 999999 ppm - so any guard on that walk yields a non-minimal answer on input a hostile SERVICE can choose. Use binary search: apply is non-decreasing with steps of 0 or 1."
+  },
+  "parse": [
+    {
+      "metadata": "[[\"text/plain\",\"a mint\"],[\"text/plain\",\"Mint fees: 1000,2000\"]]",
+      "expect": {
+        "baseFeeMsat": 1000,
+        "feePpm": 2000
+      }
+    },
+    {
+      "metadata": "[[\"text/plain\",\"Mint fees:1000,2000\"]]",
+      "expect": {
+        "baseFeeMsat": 1000,
+        "feePpm": 2000
+      },
+      "why": "whitespace after the colon is optional"
+    },
+    {
+      "metadata": "[[\"text/plain\",\"Mint fees: 1000 , 2000 \"]]",
+      "expect": {
+        "baseFeeMsat": 1000,
+        "feePpm": 2000
+      }
+    },
+    {
+      "metadata": "[[\"text/plain\",\"a mint\"]]",
+      "expect": null,
+      "why": "no fee entry - read as fee-free"
+    },
+    {
+      "metadata": "[[\"text/plain\",\"Mint fees: 0,0\"]]",
+      "expect": null,
+      "why": "an explicit zero fee is identical to no fee; callers should not have to special-case it"
+    },
+    {
+      "metadata": "[[\"text/plain\",\"Mint fees: 0,1000000\"]]",
+      "expect": null,
+      "why": "a fee of 100% or more can never net anything, and would make a naive gross-up walk hang - refuse it as no valid entry"
+    },
+    {
+      "metadata": "[[\"text/plain\",\"Mint fees: 0,2000000\"]]",
+      "expect": null,
+      "why": "above 100%"
+    },
+    {
+      "metadata": "[[\"text/identifier\",\"Mint fees: 1000,2000\"]]",
+      "expect": null,
+      "why": "only text/plain entries carry the fee advertisement"
+    },
+    {
+      "metadata": "[[\"text/plain\",\"Mint fees: -1,2000\"]]",
+      "expect": null,
+      "why": "negative components are not a valid advertisement"
+    },
+    {
+      "metadata": "[[\"text/plain\",\"Mint fees: 1000\"]]",
+      "expect": null,
+      "why": "both components are required"
+    },
+    {
+      "metadata": "[[\"text/plain\",\"Mint fees: 1000,2000,3000\"]]",
+      "expect": null,
+      "why": "exactly two components"
+    },
+    {
+      "metadata": "not json",
+      "expect": null
+    },
+    {
+      "metadata": "{}",
+      "expect": null,
+      "why": "metadata must be an array"
+    },
+    {
+      "metadata": "[]",
+      "expect": null
+    },
+    {
+      "metadata": "[[\"text/plain\",\"Mint fees: 500,0\"]]",
+      "expect": {
+        "baseFeeMsat": 500,
+        "feePpm": 0
+      }
+    },
+    {
+      "metadata": "[[\"text/plain\",\"Mint fees: 0,5000\"]]",
+      "expect": {
+        "baseFeeMsat": 0,
+        "feePpm": 5000
+      }
+    },
+    {
+      "metadata": "[[\"text/plain\",\"Mint fees: 500,0\"],[\"text/plain\",\"Mint fees: 1000,2000\"]]",
+      "expect": {
+        "baseFeeMsat": 500,
+        "feePpm": 0
+      },
+      "why": "the first valid advertisement wins"
+    }
+  ],
+  "apply": [
+    {
+      "grossMsat": 100000,
+      "fee": {
+        "baseFeeMsat": 1000,
+        "feePpm": 2000
+      },
+      "expect": 98800
+    },
+    {
+      "grossMsat": 100000,
+      "fee": {
+        "baseFeeMsat": 0,
+        "feePpm": 0
+      },
+      "expect": 100000
+    },
+    {
+      "grossMsat": 1000,
+      "fee": {
+        "baseFeeMsat": 2000,
+        "feePpm": 0
+      },
+      "expect": 0,
+      "why": "never negative"
+    },
+    {
+      "grossMsat": 1001,
+      "fee": {
+        "baseFeeMsat": 0,
+        "feePpm": 1
+      },
+      "expect": 1001,
+      "why": "the proportional part floors to zero"
+    },
+    {
+      "grossMsat": 2000000,
+      "fee": {
+        "baseFeeMsat": 0,
+        "feePpm": 1
+      },
+      "expect": 1999998
+    },
+    {
+      "grossMsat": 0,
+      "fee": {
+        "baseFeeMsat": 0,
+        "feePpm": 1000
+      },
+      "expect": 0
+    },
+    {
+      "grossMsat": 21000,
+      "fee": {
+        "baseFeeMsat": 0,
+        "feePpm": 10000
+      },
+      "expect": 20790
+    },
+    {
+      "grossMsat": 2100000000000000,
+      "fee": {
+        "baseFeeMsat": 3,
+        "feePpm": 999999
+      },
+      "expect": 2099999997,
+      "why": "21M BTC in msat at a 99.9999% fee: a naive gross*ppm multiply overflows 64-bit unsigned here and produces a wrong answer"
+    },
+    {
+      "grossMsat": 2100000000000000,
+      "fee": {
+        "baseFeeMsat": 0,
+        "feePpm": 1
+      },
+      "expect": 2099997900000000,
+      "why": "same magnitude, ordinary fee - still past the naive-multiply limit"
+    }
+  ],
+  "grossUp": [
+    {
+      "netMsat": 98800,
+      "fee": {
+        "baseFeeMsat": 1000,
+        "feePpm": 2000
+      },
+      "expect": 99999
+    },
+    {
+      "netMsat": 100000,
+      "fee": {
+        "baseFeeMsat": 0,
+        "feePpm": 0
+      },
+      "expect": 100000
+    },
+    {
+      "netMsat": 1,
+      "fee": {
+        "baseFeeMsat": 1000,
+        "feePpm": 0
+      },
+      "expect": 1001
+    },
+    {
+      "netMsat": 10000,
+      "fee": {
+        "baseFeeMsat": 0,
+        "feePpm": 10000
+      },
+      "expect": 10101
+    },
+    {
+      "netMsat": 21000,
+      "fee": {
+        "baseFeeMsat": 1000,
+        "feePpm": 2000
+      },
+      "expect": 22044
+    },
+    {
+      "netMsat": 1,
+      "fee": {
+        "baseFeeMsat": 3,
+        "feePpm": 999999
+      },
+      "expect": 3000001,
+      "why": "a 99.9999% fee: the answer is far below the linear estimate, so an estimate-then-walk implementation returns a non-minimal gross unless its guard is around a million steps"
+    },
+    {
+      "netMsat": 1000000,
+      "fee": {
+        "baseFeeMsat": 3,
+        "feePpm": 999999
+      },
+      "expect": 1000002000001
+    },
+    {
+      "netMsat": 0,
+      "fee": {
+        "baseFeeMsat": 1000,
+        "feePpm": 2000
+      },
+      "expect": 0,
+      "why": "nothing to gross up"
+    }
+  ],
+  "grossUpRoundTrip": {
+    "note": "for every fee and net amount below, apply(grossUp(net, fee), fee) must equal net exactly, and apply(grossUp(net, fee) - 1, fee) must be strictly less than net - that is, the result is the true minimum, not merely sufficient",
+    "fees": [
+      {
+        "baseFeeMsat": 0,
+        "feePpm": 0
+      },
+      {
+        "baseFeeMsat": 1000,
+        "feePpm": 0
+      },
+      {
+        "baseFeeMsat": 0,
+        "feePpm": 2000
+      },
+      {
+        "baseFeeMsat": 1000,
+        "feePpm": 2000
+      },
+      {
+        "baseFeeMsat": 3,
+        "feePpm": 999999
+      },
+      {
+        "baseFeeMsat": 0,
+        "feePpm": 1
+      }
+    ],
+    "netAmountsMsat": [
+      1,
+      2,
+      999,
+      1000,
+      1001,
+      21000,
+      100000,
+      1000000,
+      123456789
+    ]
+  },
+  "formatPercent": [
+    {
+      "ppm": 2000,
+      "expect": "0.2"
+    },
+    {
+      "ppm": 10000,
+      "expect": "1"
+    },
+    {
+      "ppm": 1,
+      "expect": "0.0001"
+    },
+    {
+      "ppm": 0,
+      "expect": "0"
+    },
+    {
+      "ppm": 999999,
+      "expect": "99.9999"
+    },
+    {
+      "ppm": 12345,
+      "expect": "1.2345"
+    }
+  ]
+}

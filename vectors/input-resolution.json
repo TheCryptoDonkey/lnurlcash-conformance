@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "spec": "LUD-01, LUD-16, LUD-17, LUD-25",
+  "description": "Resolving user-supplied text down to a fetchable URL. Every branch that produces a URL must also pass the url-admission rules.",
+  "lnurl": [
+    {
+      "input": "https://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expect": "https://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "input": "lnurlw://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expect": "https://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "input": "LNURLW://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expect": "https://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "why": "scheme is case-insensitive"
+    },
+    {
+      "input": "lnurlp://mint.example/p",
+      "expect": "https://mint.example/p"
+    },
+    {
+      "input": "lnurlw://localhost:8000/w",
+      "expect": "http://localhost:8000/w",
+      "why": "loopback resolves to http"
+    },
+    {
+      "input": "lnurlw://mint.onion/w",
+      "expect": "http://mint.onion/w"
+    },
+    {
+      "input": "LNURL1DP68GURN8GHJ7MTFDE6ZUETCV9KHQMR99AMST60YTL",
+      "expect": "https://mint.example/w"
+    },
+    {
+      "input": "  https://mint.example/w  ",
+      "expect": "https://mint.example/w",
+      "why": "surrounding whitespace trimmed"
+    },
+    {
+      "input": "mint@mint.example",
+      "expect": "https://mint.example/.well-known/lnurlp/mint"
+    },
+    {
+      "input": "http://mint.example/w",
+      "expect": null,
+      "why": "cleartext clearnet"
+    },
+    {
+      "input": "",
+      "expect": null
+    },
+    {
+      "input": "gibberish",
+      "expect": null
+    }
+  ],
+  "mint": [
+    {
+      "input": "mint@mint.example",
+      "expect": "https://mint.example/.well-known/lnurlp/mint"
+    },
+    {
+      "input": "alice@mint.example",
+      "expect": "https://mint.example/.well-known/lnurlp/alice"
+    },
+    {
+      "input": "_@mint.example",
+      "expect": "https://mint.example/.well-known/lnurlp/_",
+      "why": "LUD-16 bare-domain reserved name"
+    },
+    {
+      "input": "mint@localhost:8000",
+      "expect": "http://localhost:8000/.well-known/lnurlp/mint"
+    },
+    {
+      "input": "LNURL1DP68GURN8GHJ7MTFDE6ZUETCV9KHQMR99UH8WETVDSKKKMN0WAHZ7MRWW4EXCUP0D45KUAQNY2AVS",
+      "expect": "https://mint.example/.well-known/lnurlp/mint"
+    },
+    {
+      "input": "https://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expect": null,
+      "why": "a raw URL is not a mint address"
+    },
+    {
+      "input": "",
+      "expect": null
+    }
+  ],
+  "note": [
+    {
+      "input": "lnurlw://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expect": "https://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "input": "https://mint.example/w?k1=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "expect": "https://mint.example/w?k1=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "why": "resolution preserves the URL; k1 casing is normalised on extraction, not here"
+    },
+    {
+      "input": "https://mint.example/w",
+      "expect": null,
+      "why": "no k1 - not a note"
+    },
+    {
+      "input": "https://mint.example/w?k1=short",
+      "expect": null,
+      "why": "k1 must be 32 bytes hex"
+    },
+    {
+      "input": "https://mint.example/w?k1=zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+      "expect": null,
+      "why": "k1 must be hex"
+    },
+    {
+      "input": "LNURL1DP68GURN8GHJ7MTFDE6ZUETCV9KHQMR99AMN76E384SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPV9SKZCTPUYQ9Q2",
+      "expect": "https://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "mintAddressUrl": [
+    {
+      "payUrl": "https://mint.example/.well-known/lnurlp/mint",
+      "expect": "https://mint.example/.well-known/lnurlw/mint"
+    },
+    {
+      "payUrl": "https://mint.example/.well-known/lnurlp/_",
+      "expect": "https://mint.example/.well-known/lnurlw/_"
+    },
+    {
+      "payUrl": "https://mint.example/p",
+      "expect": null,
+      "why": "not at the conventional well-known path"
+    }
+  ],
+  "lightningAddressUsername": [
+    {
+      "payUrl": "https://mint.example/.well-known/lnurlp/mint",
+      "expect": "mint"
+    },
+    {
+      "payUrl": "https://mint.example/.well-known/lnurlp/_",
+      "expect": "_"
+    },
+    {
+      "payUrl": "https://mint.example/p",
+      "expect": null
+    }
+  ]
+}

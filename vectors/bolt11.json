@@ -1,0 +1,128 @@
+{
+  "version": 1,
+  "spec": "BOLT-11",
+  "description": "Only what a WALLET needs to bind a SERVICE response to the payment it asked for: the amount out of the human-readable part, a loose shape check, and case-insensitive equality. No full TLV decode is required.",
+  "decodeAmountMsat": [
+    {
+      "pr": "lnbc210n1pjqrstuvwxyz",
+      "expect": 21000
+    },
+    {
+      "pr": "lnbc1u1pjqrstuvwxyz",
+      "expect": 100000
+    },
+    {
+      "pr": "lnbc1m1pjqrstuvwxyz",
+      "expect": 100000000
+    },
+    {
+      "pr": "lnbc10p1pjqrstuvwxyz",
+      "expect": 1
+    },
+    {
+      "pr": "lnbc1pjqrstuvwxyz",
+      "expect": null,
+      "why": "amountless invoice"
+    },
+    {
+      "pr": "lntb210n1pjqrstuvwxyz",
+      "expect": 21000,
+      "why": "testnet prefix"
+    },
+    {
+      "pr": "lnbcrt210n1pjqrstuvwxyz",
+      "expect": 21000,
+      "why": "regtest prefix"
+    },
+    {
+      "pr": "LNBC210N1PJQRSTUVWXYZ",
+      "expect": 21000,
+      "why": "bech32 is case-insensitive"
+    },
+    {
+      "pr": "lnbc1p1pjqrstuvwxyz",
+      "expect": null,
+      "why": "1 pico-BTC is 0.1 msat - not an integer number of msat"
+    },
+    {
+      "pr": "not an invoice",
+      "expect": null
+    },
+    {
+      "pr": "",
+      "expect": null
+    },
+    {
+      "pr": "lnurl1dp68gurn8ghj7",
+      "expect": null,
+      "why": "an LNURL is not an invoice"
+    }
+  ],
+  "isInvoice": [
+    {
+      "pr": "lnbc210n1pjqrstuvwxyz",
+      "expect": true
+    },
+    {
+      "pr": "lnbc1pjqrstuvwxyz",
+      "expect": true
+    },
+    {
+      "pr": "lntb1pjqrstuvwxyz",
+      "expect": true
+    },
+    {
+      "pr": "lnurl1dp68gurn8ghj7",
+      "expect": false,
+      "why": "must not match a bech32 LNURL"
+    },
+    {
+      "pr": "lnbc",
+      "expect": false
+    },
+    {
+      "pr": "",
+      "expect": false
+    }
+  ],
+  "sameInvoice": [
+    {
+      "a": "lnbc210n1pjq",
+      "b": "LNBC210N1PJQ",
+      "expect": true
+    },
+    {
+      "a": " lnbc210n1pjq ",
+      "b": "lnbc210n1pjq",
+      "expect": true
+    },
+    {
+      "a": "lnbc210n1pjq",
+      "b": "lnbc220n1pjq",
+      "expect": false
+    }
+  ],
+  "isPreimage": [
+    {
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expect": true
+    },
+    {
+      "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "expect": true
+    },
+    {
+      "value": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+      "expect": false
+    },
+    {
+      "value": "ababababababababababababababababababababababababababababababab",
+      "expect": false,
+      "why": "31 bytes"
+    },
+    {
+      "value": "",
+      "expect": false
+    }
+  ]
+}

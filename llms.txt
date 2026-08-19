@@ -1,0 +1,73 @@
+# lnurlcash-conformance
+
+Test vectors, an adversarial mock mint, and a grader for LNURLcash (LUD-25).
+MIT. Use these when implementing LNURLcash in ANY language.
+
+npm install --save-dev lnurlcash-conformance
+
+## Vectors
+
+Plain JSON in vectors/, loadable from any language, listed in
+vectors/index.json:
+
+signature.json       offline verification, both recovery-id orderings
+bech32.json          LUD-01 encoding
+url-admission.json   which URLs may be fetched (https, or http to loopback/.onion)
+input-resolution.json bech32, LUD-17, Lightning Address, bare domain
+note-url.json        parsing/building note URLs
+fees.json            fee advertisement, application, gross-up, overflow case
+bolt11.json          amount extraction, invoice equality
+callbacks.json       exact query per operation
+responses.json       classifying replies incl. ambiguous outcomes
+withdraw-info.json   the informational GET
+pay-request.json     minting, LUD-11, LUD-21
+lifecycle.json       behavioural scenarios
+
+## Mock mint
+
+import {createMockMint} from 'lnurlcash-conformance/mock-mint'
+const mint = await createMockMint({dropAfterMutation: true})
+mint.state.creditNote(k1, 21000)   // then drive your client at mint.url
+await mint.close()
+
+Misbehaviour flags: dropAfterMutation, unconfirmedMutation, malformedJson,
+echoWrongK1, lieAboutValue, signatureLayout=leading, signatures=false,
+serverGeneratedSecrets, meltNeverSettles, meltAlwaysFails, slowMs, sunset,
+baseFeeMsat, feePpm, verify=false.
+
+CLI: npx lnurlcash-mock-mint --port=8899  (nothing is payable)
+
+## Grader
+
+npx lnurlcash-conform mint@example.com                        read-only
+npx lnurlcash-conform mint@example.com --note=<url> --spend   full, burns the note
+
+Exit code non-zero on any failure.
+
+## The signature scheme, canonically
+
+note_id = hex(sha256(k1))
+message = "LNURLcash:" + amount_msat + ":" + note_id
+digest  = sha256(sha256("Lightning Signed Message:" + message))
+sig     = 65 bytes, r || s || recovery_id (wire format)
+pubkey  = 33-byte compressed, hex
+
+Recover from digest with NO further hashing (prehash off). Verifiers MUST
+also accept recovery_id || r || s. Library layouts differ:
+@noble recid-leading; coincurve trailing; Rust secp256k1 64-byte compact +
+RecoveryId; Go btcec recid+27 leading.
+
+## Fee arithmetic
+
+apply(gross, fee) = max(0, gross - base - floor(gross*ppm/1e6))
+Compute the proportional term as floor(gross/1e6)*ppm + floor((gross%1e6)*ppm/1e6):
+a direct multiply overflows u64 at realistic amounts (2.1e15 msat * 999999 ppm).
+grossUp(net, fee) = the SMALLEST gross where apply(gross) == net. Use binary
+search; apply is non-decreasing with steps of 0 or 1. An estimate-then-walk
+implementation is unbounded at 999999 ppm and returns non-minimal answers.
+
+## Spec
+
+https://github.com/lnurl/luds/pull/301
+Reference mint: https://github.com/dni/lnurl-mint
+Reference wallet: https://github.com/dni/lnurl-wallet

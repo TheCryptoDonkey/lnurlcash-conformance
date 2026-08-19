@@ -1,0 +1,183 @@
+{
+  "version": 1,
+  "spec": "LUD-06, LUD-11, LUD-16, LUD-21, LUD-25",
+  "description": "Minting. A LUD-06 payRequest MAY advertise `withdrawLink`, the raw LUD-17 URL of the withdraw endpoint: the payment preimage of its paid invoice becomes a valid k1 there. A WALLET MUST rotate immediately after claiming, because the SERVICE necessarily saw that preimage.",
+  "accepted": [
+    {
+      "name": "a minting payRequest",
+      "body": {
+        "tag": "payRequest",
+        "callback": "https://mint.example/p/cb",
+        "minSendable": 1000,
+        "maxSendable": 100000000,
+        "metadata": "[[\"text/plain\",\"a mint\"],[\"text/identifier\",\"mint@mint.example\"]]",
+        "withdrawLink": "lnurlw://mint.example/w"
+      },
+      "withdrawLink": "lnurlw://mint.example/w",
+      "mintFee": null
+    },
+    {
+      "name": "with an advertised fee",
+      "body": {
+        "tag": "payRequest",
+        "callback": "https://mint.example/p/cb",
+        "minSendable": 1000,
+        "maxSendable": 100000000,
+        "metadata": "[[\"text/plain\",\"a mint\"],[\"text/plain\",\"Mint fees: 1000,2000\"]]",
+        "withdrawLink": "lnurlw://mint.example/w"
+      },
+      "withdrawLink": "lnurlw://mint.example/w",
+      "mintFee": {
+        "baseFeeMsat": 1000,
+        "feePpm": 2000
+      }
+    },
+    {
+      "name": "an ordinary payRequest with no minting",
+      "body": {
+        "tag": "payRequest",
+        "callback": "https://mint.example/p/cb",
+        "minSendable": 1000,
+        "maxSendable": 100000000,
+        "metadata": "[[\"text/plain\",\"not a mint\"]]"
+      },
+      "withdrawLink": null,
+      "mintFee": null
+    }
+  ],
+  "rejected": [
+    {
+      "name": "wrong tag",
+      "body": {
+        "tag": "withdrawRequest",
+        "callback": "https://mint.example/p/cb"
+      }
+    },
+    {
+      "name": "no callback",
+      "body": {
+        "tag": "payRequest",
+        "minSendable": 1000,
+        "maxSendable": 1000
+      }
+    }
+  ],
+  "invoice": {
+    "accepted": [
+      {
+        "name": "invoice for the amount requested",
+        "requestedMsat": 21000,
+        "body": {
+          "pr": "lnbc210n1pjqrstuvwxyz"
+        },
+        "disposable": true,
+        "why": "LUD-11: disposable absent MUST be read as true"
+      },
+      {
+        "name": "explicitly reusable address",
+        "requestedMsat": 21000,
+        "body": {
+          "pr": "lnbc210n1pjqrstuvwxyz",
+          "disposable": false
+        },
+        "disposable": false
+      },
+      {
+        "name": "with a LUD-21 verify url",
+        "requestedMsat": 21000,
+        "body": {
+          "pr": "lnbc210n1pjqrstuvwxyz",
+          "verify": "https://mint.example/verify/abc"
+        },
+        "disposable": true,
+        "verify": "https://mint.example/verify/abc"
+      },
+      {
+        "name": "amountless invoice passes through",
+        "requestedMsat": 21000,
+        "body": {
+          "pr": "lnbc1pjqrstuvwxyz"
+        },
+        "disposable": true,
+        "why": "nothing to check it against here; the SERVICE judges it later"
+      }
+    ],
+    "rejected": [
+      {
+        "name": "invoice for a different amount",
+        "requestedMsat": 21000,
+        "body": {
+          "pr": "lnbc220n1pjqrstuvwxyz"
+        },
+        "why": "a SERVICE answering with an invoice for another amount is broken or hostile"
+      },
+      {
+        "name": "no invoice",
+        "requestedMsat": 21000,
+        "body": {}
+      }
+    ]
+  },
+  "verify": {
+    "accepted": [
+      {
+        "name": "settled, preimage disclosed",
+        "body": {
+          "status": "OK",
+          "settled": true,
+          "preimage": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "pr": "lnbc210n1pjq"
+        },
+        "settled": true,
+        "preimage": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "why": "for LNURLcash this preimage IS the bearer secret - rotate immediately, and never treat verify as having closed the exposure"
+      },
+      {
+        "name": "settled, preimage withheld",
+        "body": {
+          "status": "OK",
+          "settled": true,
+          "preimage": null,
+          "pr": "lnbc210n1pjq"
+        },
+        "settled": true,
+        "preimage": null
+      },
+      {
+        "name": "not yet settled",
+        "body": {
+          "status": "OK",
+          "settled": false,
+          "preimage": null,
+          "pr": "lnbc210n1pjq"
+        },
+        "settled": false,
+        "preimage": null
+      }
+    ],
+    "rejected": [
+      {
+        "name": "no settled field",
+        "body": {
+          "status": "OK",
+          "pr": "lnbc210n1pjq"
+        }
+      },
+      {
+        "name": "settled is a string",
+        "body": {
+          "status": "OK",
+          "settled": "true",
+          "pr": "lnbc210n1pjq"
+        }
+      },
+      {
+        "name": "no pr to bind the result to",
+        "body": {
+          "status": "OK",
+          "settled": true
+        }
+      }
+    ]
+  }
+}

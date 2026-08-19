@@ -1,0 +1,151 @@
+{
+  "version": 1,
+  "spec": "LUD-25 draft (lnurl/luds#301)",
+  "description": "Classifying a SERVICE response. The distinction that matters for funds is definitive-rejection versus ambiguous-outcome: a parsed {\"status\":\"ERROR\"} means the request was processed and refused, while a transport failure, an unparseable body, or a 200 that does not confirm means the mutation MAY have landed - and for rotate/split/merge the WALLET-generated secrets are then the only copy of the outputs, so they must ride the error rather than be discarded.",
+  "outcomes": {
+    "ok": "the operation is confirmed",
+    "pending": "this k1 has another operation in flight (a melt); retry shortly",
+    "spent": "the SERVICE is authoritative that the note is already burned; a holder may lock it as spent",
+    "unknown": "the SERVICE does not recognise this note; surface it, do not silently lock it",
+    "error": "definitively rejected for some other stated reason",
+    "ambiguous": "the outcome is not known - preserve any fresh secrets"
+  },
+  "cases": [
+    {
+      "name": "plain success",
+      "http": 200,
+      "body": {
+        "status": "OK"
+      },
+      "expect": "ok"
+    },
+    {
+      "name": "success with an offline-verification signature",
+      "http": 200,
+      "body": {
+        "status": "OK",
+        "sig": "ababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
+      },
+      "expect": "ok",
+      "signature": "ababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
+    },
+    {
+      "name": "split success with both signatures",
+      "http": 200,
+      "body": {
+        "status": "OK",
+        "sig": "ababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+        "sig2": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "expect": "ok",
+      "signature": "ababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "changeSignature": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+    },
+    {
+      "name": "melt success with a LUD-21 style proof",
+      "http": 200,
+      "body": {
+        "status": "OK",
+        "pr": "lnbc210n1pjq",
+        "verify": "https://mint.example/verify/abc"
+      },
+      "expect": "ok",
+      "why": "OK on a melt means the payment is in flight, NOT that the note is confirmed spent"
+    },
+    {
+      "name": "pending",
+      "http": 200,
+      "body": {
+        "status": "ERROR",
+        "reason": "pending"
+      },
+      "expect": "pending",
+      "why": "the exact reason string LUD-25 specifies for a k1 mid-melt"
+    },
+    {
+      "name": "already spent",
+      "http": 200,
+      "body": {
+        "status": "ERROR",
+        "reason": "Note already spent."
+      },
+      "expect": "spent"
+    },
+    {
+      "name": "unknown note",
+      "http": 200,
+      "body": {
+        "status": "ERROR",
+        "reason": "Unknown note."
+      },
+      "expect": "unknown"
+    },
+    {
+      "name": "not found wording",
+      "http": 200,
+      "body": {
+        "status": "ERROR",
+        "reason": "k1 not found"
+      },
+      "expect": "unknown"
+    },
+    {
+      "name": "ambiguous callback wording is treated as spent",
+      "http": 200,
+      "body": {
+        "status": "ERROR",
+        "reason": "Invalid or already spent k1."
+      },
+      "expect": "spent",
+      "why": "an atomic multi-k1 callback cannot say which k1 failed; the spent reading is the safe one"
+    },
+    {
+      "name": "some other refusal",
+      "http": 200,
+      "body": {
+        "status": "ERROR",
+        "reason": "This mint is sunsetting - splits are disabled."
+      },
+      "expect": "error"
+    },
+    {
+      "name": "error with no reason",
+      "http": 200,
+      "body": {
+        "status": "ERROR"
+      },
+      "expect": "error"
+    },
+    {
+      "name": "200 with neither OK nor ERROR",
+      "http": 200,
+      "body": {
+        "something": "else"
+      },
+      "expect": "ambiguous",
+      "why": "the mutation was not confirmed and may still have landed"
+    },
+    {
+      "name": "unparseable body",
+      "http": 200,
+      "bodyRaw": "not json at all",
+      "expect": "ambiguous"
+    },
+    {
+      "name": "server error",
+      "http": 500,
+      "bodyRaw": "upstream failure",
+      "expect": "ambiguous"
+    },
+    {
+      "name": "transport failure",
+      "transportError": true,
+      "expect": "ambiguous"
+    },
+    {
+      "name": "timeout",
+      "timeout": true,
+      "expect": "ambiguous"
+    }
+  ]
+}

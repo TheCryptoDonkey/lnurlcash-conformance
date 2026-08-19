@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  vectors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      # the vectors are generated: a diff here means someone hand-edited one
+      - run: npm run generate
+      - run: git diff --exit-code vectors/
+      - run: npm test
+
+  grader:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      # the grader must pass a compliant mint and fail a broken one
+      - name: grade a compliant mint
+        run: |
+          node mock-mint/index.mjs --port=8899 > mint.log 2>&1 &
+          sleep 2
+          node runner/cli.mjs mint@127.0.0.1:8899 --note="$(grep -o 'lnurlw://[^ ]*' mint.log)" --spend
+      - name: fail a non-compliant mint
+        run: |
+          node mock-mint/index.mjs --port=8900 --echoWrongK1=true > bad.log 2>&1 &
+          sleep 2
+          if node runner/cli.mjs mint@127.0.0.1:8900 --note="$(grep -o 'lnurlw://[^ ]*' bad.log)" --spend; then
+            echo "the grader passed a mint that echoes the wrong k1"
+            exit 1
+          fi

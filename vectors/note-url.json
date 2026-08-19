@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "spec": "LUD-25 draft (lnurl/luds#301)",
+  "description": "A note is an ordinary LUD-03 withdrawRequest URL whose k1 IS the asset. `amount` alongside it is only a claim by whoever encoded the note - the authoritative value is always maxWithdrawable from an informational GET. `sig` is the optional offline-verification signature.",
+  "parse": [
+    {
+      "url": "https://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&amount=21000",
+      "k1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "declaredAmountMsat": 21000,
+      "signature": null
+    },
+    {
+      "url": "https://mint.example/w?k1=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "k1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "declaredAmountMsat": null,
+      "signature": null,
+      "why": "k1 is bytes, not text: normalise to lowercase so the same secret in two casings is one note"
+    },
+    {
+      "url": "https://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&amount=21000&sig=ababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "k1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "declaredAmountMsat": 21000,
+      "signature": "ababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
+    },
+    {
+      "url": "https://mint.example/w",
+      "k1": null,
+      "declaredAmountMsat": null,
+      "signature": null
+    },
+    {
+      "url": "https://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&amount=notanumber",
+      "k1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "declaredAmountMsat": null,
+      "signature": null,
+      "why": "an unparseable declared amount is absent, not zero"
+    },
+    {
+      "url": "not a url",
+      "k1": null,
+      "declaredAmountMsat": null,
+      "signature": null
+    }
+  ],
+  "build": [
+    {
+      "withdrawLink": "lnurlw://mint.example/w",
+      "k1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amountMsat": 21000,
+      "expect": "https://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&amount=21000"
+    },
+    {
+      "withdrawLink": "https://mint.example/w",
+      "k1": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "amountMsat": null,
+      "expect": "https://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "why": "omit amount entirely when the real value is not known yet; some SERVICEs validate it strictly rather than ignoring it"
+    },
+    {
+      "withdrawLink": "lnurlw://localhost:8000/w",
+      "k1": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+      "amountMsat": 1000,
+      "expect": "http://localhost:8000/w?k1=0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f&amount=1000"
+    }
+  ],
+  "withNewK1": [
+    {
+      "url": "https://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&amount=21000&sig=ababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "k1": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "amountMsat": 5000,
+      "signature": null,
+      "expect": "https://mint.example/w?k1=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&amount=5000",
+      "why": "a stale signature must be dropped: it no longer matches the new secret"
+    },
+    {
+      "url": "https://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&amount=21000",
+      "k1": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "amountMsat": 5000,
+      "signature": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "expect": "https://mint.example/w?k1=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&amount=5000&sig=cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+    }
+  ],
+  "withoutK1": [
+    {
+      "url": "https://mint.example/w?k1=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&amount=21000&sig=ababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "amountMsat": 5000,
+      "signature": null,
+      "expect": "https://mint.example/w?amount=5000",
+      "why": "a device-backed note keeps the URL template but never the secret"
+    }
+  ]
+}
