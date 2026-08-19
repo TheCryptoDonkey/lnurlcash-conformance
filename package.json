@@ -32,7 +32,10 @@
   "exports": {
     ".": "./runner/index.mjs",
     "./vectors/*": "./vectors/*",
-    "./mock-mint": "./mock-mint/index.mjs"
+    "./mock-mint": {
+      "types": "./mock-mint/index.d.ts",
+      "default": "./mock-mint/index.mjs"
+    }
   },
   "bin": {
     "lnurlcash-conform": "./runner/cli.mjs",
