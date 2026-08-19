@@ -105,6 +105,29 @@ const assert = (condition, message) => {
   if (!condition) throw new Error(message)
 }
 
+// The LUD-25 fee advertisement, parsed from payRequest metadata: null for
+// a fee-free (or silent) mint. The grader needs it because the spec's fee
+// algebra changes what a compliant split and merge return.
+export const parseAdvertisedMintFee = metadata => {
+  let entries
+  try {
+    entries = JSON.parse(metadata)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(entries)) return null
+  for (const entry of entries) {
+    if (!Array.isArray(entry) || entry[0] !== 'text/plain') continue
+    const match = typeof entry[1] === 'string' && entry[1].match(/^Mint fees:\s*(\d+)\s*,\s*(\d+)\s*$/)
+    if (!match) continue
+    const baseFeeMsat = Number(match[1])
+    const feePpm = Number(match[2])
+    if (baseFeeMsat === 0 && feePpm === 0) return null
+    return {baseFeeMsat, feePpm}
+  }
+  return null
+}
+
 // Resolves what the user typed - a Lightning Address, a bare domain, or a
 // URL - to the payRequest URL to grade.
 export const resolveMint = input => {
@@ -227,7 +250,13 @@ export const gradeMint = async (payUrl, report) => {
 // These SPEND. They burn the note they are given and leave the value in a
 // fresh note the runner prints at the end.
 
-export const gradeNote = async (noteUrl, report) => {
+// options.mintFee: the service's advertised fee ({baseFeeMsat, feePpm}),
+// null for known-fee-free, or leave the key absent when unknown - the
+// split/merge conservation checks are exact when the fee is known and
+// bounded when it is not. LUD-25's fee algebra: base_fee_msat comes out of
+// every split's change, and a merge of n notes refunds (n - 1) base fees.
+export const gradeNote = async (noteUrl, report, options = {}) => {
+  const knownBaseFee = 'mintFee' in options ? (options.mintFee?.baseFeeMsat ?? 0) : null
   const url = new URL(noteUrl.replace(/^lnurlw:\/\//i, m =>
     /localhost|127\.0\.0\.1|\.onion/.test(noteUrl) ? 'http://' : 'https://'
   ))
@@ -415,6 +444,9 @@ export const gradeNote = async (noteUrl, report) => {
   await report.check('split conserves value', async () => {
     const half = Math.floor(info.maxWithdrawable / 2)
     if (half < 1) throw soft('note too small to split')
+    if (knownBaseFee !== null && info.maxWithdrawable - half < knownBaseFee + 1) {
+      throw soft('note too small to split past the advertised base fee')
+    }
     const a = bytesToHex(randomBytes(32))
     const b = bytesToHex(randomBytes(32))
     const cb = new URL(info.callback)
@@ -433,11 +465,22 @@ export const gradeNote = async (noteUrl, report) => {
       return r.maxWithdrawable
     }
     const [va, vb] = [await valueOf(a), await valueOf(b)]
-    assert(va === half, `asked to split off ${half}, got ${va}`)
     assert(
-      va + vb <= info.maxWithdrawable,
-      `split created value: ${va} + ${vb} > ${info.maxWithdrawable}`
+      va === half,
+      `asked to split off ${half}, got ${va} - any split fee comes out of change, never the requested amount`
     )
+    if (knownBaseFee !== null) {
+      const expectedChange = info.maxWithdrawable - half - knownBaseFee
+      assert(
+        vb === expectedChange,
+        `change was ${vb} msat - LUD-25 says total minus amount minus the base fee, ${expectedChange}`
+      )
+    } else {
+      assert(
+        va + vb <= info.maxWithdrawable,
+        `split created value: ${va} + ${vb} > ${info.maxWithdrawable}`
+      )
+    }
 
     // put it back together so the runner ends holding one note
     const merged = bytesToHex(randomBytes(32))
@@ -449,10 +492,17 @@ export const gradeNote = async (noteUrl, report) => {
     assert(mbody.status === 'OK', `merge refused: ${mbody.reason}`)
     current = merged
     const total = await valueOf(merged)
-    assert(
-      total === va + vb,
-      `merge did not conserve value: ${va} + ${vb} became ${total}`
-    )
+    if (knownBaseFee !== null) {
+      assert(
+        total === va + vb + knownBaseFee,
+        `a merge of 2 notes refunds one base fee per LUD-25: expected ${va + vb + knownBaseFee}, got ${total}`
+      )
+    } else {
+      assert(
+        total >= va + vb && total <= info.maxWithdrawable,
+        `merge did not conserve value: ${va} + ${vb} became ${total}`
+      )
+    }
     return `${va} + ${vb}, merged back to ${total}`
   })
 

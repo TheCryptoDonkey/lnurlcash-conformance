@@ -126,6 +126,22 @@ export const createMockMint = async (options = {}) => {
     return Math.max(0, gross - opts.baseFeeMsat - proportional)
   }
 
+  // The advertised minimum must survive the advertised fee: a minSendable
+  // whose note nets nothing invites a payment /p/cb then refuses. Binary
+  // search for the smallest gross that still nets at least 1 msat -
+  // applyFee is non-decreasing, so the minimum exists and is exact.
+  const minSendableMsat = (() => {
+    let hi = opts.minSendableMsat + opts.baseFeeMsat + 1
+    while (applyFee(hi) < 1) hi *= 2
+    let lo = 0
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2)
+      if (applyFee(mid) >= 1) hi = mid
+      else lo = mid + 1
+    }
+    return Math.max(opts.minSendableMsat, lo)
+  })()
+
   const state = {
     notes,
     invoices,
@@ -240,7 +256,7 @@ export const createMockMint = async (options = {}) => {
       return send({
         tag: 'payRequest',
         callback: `${origin}/p/cb`,
-        minSendable: opts.minSendableMsat,
+        minSendable: minSendableMsat,
         maxSendable: opts.maxSendableMsat,
         metadata: JSON.stringify(metadata),
         withdrawLink: `lnurlw://${req.headers.host}/w`,
@@ -278,7 +294,7 @@ export const createMockMint = async (options = {}) => {
       if (!Number.isFinite(amount) || amount <= 0) {
         return fail('Invalid amount.')
       }
-      if (amount < opts.minSendableMsat || amount > opts.maxSendableMsat) {
+      if (amount < minSendableMsat || amount > opts.maxSendableMsat) {
         return fail('Amount out of range.')
       }
       const net = applyFee(amount)
@@ -427,12 +443,21 @@ export const createMockMint = async (options = {}) => {
           return fail('This mint is sunsetting - splits are disabled.')
         }
         const amount = Number(amountRaw)
-        if (!Number.isFinite(amount) || amount <= 0 || amount > total) {
+        if (!Number.isFinite(amount) || amount <= 0 || amount >= total) {
           return fail('Invalid amount.')
         }
+        // LUD-25: a fee-advertising SERVICE deducts base_fee_msat from
+        // every split's CHANGE - never from the requested amount - so a
+        // holder cannot dodge per-melt costs by splitting into dust. A
+        // change that cannot cover the fee, or would land at exactly
+        // nothing, refuses with the spec's own reason.
+        const changeBeforeFee = total - amount
+        if (changeBeforeFee < opts.baseFeeMsat) return fail('insufficient value')
+        const change = changeBeforeFee - opts.baseFeeMsat
+        if (change < 1) return fail('insufficient value')
         for (const {note} of found) note.state = 'burned'
         const sig = mintNote(h, amount)
-        const sig2 = mintNote(h2, total - amount)
+        const sig2 = mintNote(h2, change)
         const body = {status: 'OK'}
         if (sig) body.sig = sig
         if (sig2) body.sig2 = sig2
@@ -443,9 +468,13 @@ export const createMockMint = async (options = {}) => {
         return finish(body)
       }
 
-      // rotate (one k1) or merge (several) - same shape either way
+      // rotate (one k1) or merge (several) - same shape either way.
+      // LUD-25: a merge of n notes refunds (n - 1) base fees, since the
+      // SERVICE now faces one eventual melt instead of n. A rotate is a
+      // merge of one - refund exactly 0.
+      const refund = (k1s.length - 1) * opts.baseFeeMsat
       for (const {note} of found) note.state = 'burned'
-      const sig = mintNote(h, total)
+      const sig = mintNote(h, total + refund)
       const body = {status: 'OK'}
       if (sig) body.sig = sig
       if (opts.serverGeneratedSecrets) body.k1 = 'a'.repeat(64)

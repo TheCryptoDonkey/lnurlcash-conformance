@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import {createReport, gradeMint, gradeNote, resolveMint} from './index.mjs'
+import {createReport, gradeMint, gradeNote, parseAdvertisedMintFee, resolveMint} from './index.mjs'
 
 const args = process.argv.slice(2)
 const flags = new Set(args.filter(a => a.startsWith('--')))
@@ -23,10 +23,11 @@ confirm you meant it.`)
 
 const report = createReport()
 
+let pay
 if (positional[0]) {
   const payUrl = resolveMint(positional[0])
   console.log(`grading ${payUrl}\n`)
-  await gradeMint(payUrl, report)
+  pay = await gradeMint(payUrl, report)
 }
 
 let finished
@@ -35,7 +36,10 @@ if (noteArg) {
     report.skip('note checks', 'pass --spend to run them - they burn the note')
   } else {
     console.log('running the mutating checks - this spends the note given\n')
-    finished = await gradeNote(noteArg, report)
+    // knowing the advertised fee makes the conservation checks exact
+    const options =
+      pay && typeof pay.metadata === 'string' ? {mintFee: parseAdvertisedMintFee(pay.metadata)} : {}
+    finished = await gradeNote(noteArg, report, options)
   }
 }
 

@@ -128,8 +128,9 @@ It burns the note it is given and prints where the value ended up. It
 checks that the informational GET is idempotent and echoes the queried
 `k1`, that the URL's own `amount` is ignored, that a rotate with no `h` is
 refused, that a rotate returns no secret, that signatures verify against the
-advertised `mintPubkey`, that split and merge conserve value, and that a
-burned secret cannot be replayed. It also probes three adversarial shapes a
+advertised `mintPubkey`, that split and merge conserve value - exactly,
+under LUD-25's fee algebra, when the mint's fee advertisement is known -
+and that a burned secret cannot be replayed. It also probes three adversarial shapes a
 mint must refuse atomically: a duplicated `k1` (which a careless mint counts
 twice, minting money from nothing), an output hash that collides with an
 existing note id (minting over it hands the output to whoever already knows
