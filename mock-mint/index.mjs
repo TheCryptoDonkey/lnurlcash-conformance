@@ -223,6 +223,13 @@ export const createMockMint = async (options = {}) => {
       return handleTestHook(url, q, sendRaw)
     }
 
+    // Every protocol endpoint below is a GET, and /w/cb mutates on whatever
+    // arrives - an OPTIONS preflight or a stray POST must never reach a
+    // handler. The grader checks exactly this.
+    if (req.method !== 'GET') {
+      return sendRaw({status: 'ERROR', reason: 'Not found.'}, 404)
+    }
+
     if (opts.slowMs) await new Promise(r => setTimeout(r, opts.slowMs))
     const send = (body, status = 200) => {
       if (opts.malformedJson) {

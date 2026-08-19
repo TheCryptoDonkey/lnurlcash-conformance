@@ -441,6 +441,31 @@ export const gradeNote = async (noteUrl, report, options = {}) => {
     return body.reason
   })
 
+  await report.check('never mutates on a non-GET request', async () => {
+    // LNURL endpoints are GETs. An OPTIONS preflight or a stray POST
+    // carrying the callback's query string must leave the note untouched -
+    // real HTTP stacks send both on their own initiative.
+    for (const method of ['POST', 'OPTIONS']) {
+      const fresh = bytesToHex(randomBytes(32))
+      const cb = new URL(info.callback)
+      cb.searchParams.append('k1', current)
+      cb.searchParams.append('h', noteId(fresh))
+      // the response - even an error - is not the assertion; the store is
+      await fetch(cb.toString(), {method, signal: AbortSignal.timeout(15_000)})
+        .then(res => res.arrayBuffer())
+        .catch(() => {})
+      const stillUrl = new URL(url)
+      stillUrl.searchParams.set('k1', current)
+      const still = await get(stillUrl)
+      assert(still.status !== 'ERROR', `a ${method} request burned the note - the mutating callback must answer GET only`)
+      const probe = new URL(url)
+      probe.searchParams.set('k1', fresh)
+      const output = await get(probe)
+      assert(output.status === 'ERROR', `a ${method} request minted its output - the mutating callback must answer GET only`)
+    }
+    return 'POST and OPTIONS left the note untouched'
+  })
+
   await report.check('split conserves value', async () => {
     const half = Math.floor(info.maxWithdrawable / 2)
     if (half < 1) throw soft('note too small to split')

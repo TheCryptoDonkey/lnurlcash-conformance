@@ -118,6 +118,26 @@
       }
     },
     {
+      "name": "fractional maxWithdrawable",
+      "body": {
+        "tag": "withdrawRequest",
+        "callback": "https://mint.example/w/cb",
+        "k1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "maxWithdrawable": 21000.5
+      },
+      "why": "msat are integers"
+    },
+    {
+      "name": "maxWithdrawable past 2^63",
+      "body": {
+        "tag": "withdrawRequest",
+        "callback": "https://mint.example/w/cb",
+        "k1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "maxWithdrawable": 18446744073709552000
+      },
+      "why": "no common integer type holds it and a double rounds it - refuse rather than guess the amount"
+    },
+    {
       "name": "minWithdrawable above maxWithdrawable",
       "body": {
         "tag": "withdrawRequest",

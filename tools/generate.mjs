@@ -561,6 +561,16 @@ const fees = {
       expect: null,
       why: 'exactly two components'
     },
+    {
+      metadata: meta([['text/plain', 'Mint fees: 99999999999999999999,2000']]),
+      expect: null,
+      why: 'digits past 2^53 lose integer precision in most languages - refuse rather than estimate with a mangled fee'
+    },
+    {
+      metadata: meta([['text/plain', 'Mint fees: 1000,99999999999999999999']]),
+      expect: null,
+      why: 'the same for the ppm component (a ppm this large fails the 100% rule regardless)'
+    },
     {metadata: 'not json', expect: null},
     {metadata: '{}', expect: null, why: 'metadata must be an array'},
     {metadata: '[]', expect: null},
@@ -922,6 +932,16 @@ const withdrawInfo = {
     {name: 'no maxWithdrawable', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A}},
     {name: 'maxWithdrawable is a string', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: '21000'}},
     {name: 'negative maxWithdrawable', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: -1}},
+    {
+      name: 'fractional maxWithdrawable',
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 21000.5},
+      why: 'msat are integers'
+    },
+    {
+      name: 'maxWithdrawable past 2^63',
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 2 ** 64},
+      why: 'no common integer type holds it and a double rounds it - refuse rather than guess the amount'
+    },
     {name: 'minWithdrawable above maxWithdrawable', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, minWithdrawable: 30000, maxWithdrawable: 21000}},
     {
       name: 'echoed a different k1 than queried',

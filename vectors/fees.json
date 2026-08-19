@@ -72,6 +72,16 @@
       "why": "exactly two components"
     },
     {
+      "metadata": "[[\"text/plain\",\"Mint fees: 99999999999999999999,2000\"]]",
+      "expect": null,
+      "why": "digits past 2^53 lose integer precision in most languages - refuse rather than estimate with a mangled fee"
+    },
+    {
+      "metadata": "[[\"text/plain\",\"Mint fees: 1000,99999999999999999999\"]]",
+      "expect": null,
+      "why": "the same for the ppm component (a ppm this large fails the 100% rule regardless)"
+    },
+    {
       "metadata": "not json",
       "expect": null
     },

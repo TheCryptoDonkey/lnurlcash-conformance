@@ -135,7 +135,9 @@ mint must refuse atomically: a duplicated `k1` (which a careless mint counts
 twice, minting money from nothing), an output hash that collides with an
 existing note id (minting over it hands the output to whoever already knows
 that id's preimage), and a split whose `h` equals `h2` (one id cannot carry
-two notes). After every refusal it confirms the refused note is still
+two notes). And it replays the callback as a POST and as an OPTIONS
+preflight - real HTTP stacks send both on their own initiative, so the
+mutating endpoint must answer GET only. After every refusal it confirms the refused note is still
 spendable. Use a small note. Exit code is non-zero if anything failed.
 
 The grader shares no code with any LNURLcash library — it is written against
