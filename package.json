@@ -44,7 +44,8 @@
   "scripts": {
     "generate": "node tools/generate.mjs",
     "test": "node tools/selfcheck.mjs",
-    "mint": "node mock-mint/index.mjs"
+    "mint": "node mock-mint/index.mjs",
+    "check": "npm run generate && git diff --exit-code vectors/ && npm test && node tools/selfgrade.mjs"
   },
   "dependencies": {
     "@noble/curves": "^2.3.0",
