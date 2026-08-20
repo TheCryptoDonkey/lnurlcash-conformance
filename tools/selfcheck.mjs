@@ -305,6 +305,121 @@ check('every lifecycle scenario states a requirement', () => {
   }
 })
 
+// ---- threat suite ----
+
+const threatSuite = load('threat-suite.json')
+const THREAT_KINDS = ['attack', 'control', 'property', 'gap']
+const THREAT_STATUSES = [
+  'pins-current',
+  'inverts-when-option-B',
+  'inverts-when-option-D',
+  'spec-gap',
+  'arithmetic',
+  'privacy-axis'
+]
+
+check('the threat suite covers T1 through T11 in order', () => {
+  assert(
+    threatSuite.scenarios.map(s => s.id).join(',') === 'T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,T11',
+    'scenario ids are not T1..T11 in order'
+  )
+})
+
+check('every threat-suite scenario is well formed', () => {
+  const letters = Object.keys(threatSuite.options)
+  for (const s of threatSuite.scenarios) {
+    assert(THREAT_KINDS.includes(s.kind), `${s.id}: unknown kind ${s.kind}`)
+    assert(THREAT_STATUSES.includes(s.status), `${s.id}: unknown status ${s.status}`)
+    assert(typeof s.name === 'string' && s.name, `${s.id}: no name`)
+    assert(typeof s.adversary === 'string' && s.adversary, `${s.id}: no adversary`)
+    assert(Array.isArray(s.steps) && s.steps.length > 0, `${s.id}: no steps`)
+    assert(
+      typeof s.currentBehavior === 'string' && s.currentBehavior.length > 10,
+      `${s.id}: no current behavior`
+    )
+    assert(typeof s.notes === 'string' && s.notes, `${s.id}: no notes`)
+    for (const key of ['closedBy', 'notClosedBy', 'preservedBy', 'brokenBy', 'holdsUnder']) {
+      for (const letter of s.options[key] || []) {
+        assert(letters.includes(letter), `${s.id}: ${key} names unknown option ${letter}`)
+      }
+    }
+  }
+})
+
+check('threat-suite options beyond the status quo are marked as proposals', () => {
+  assert(threatSuite.options.A.status === 'current-draft', 'option A must be the current draft')
+  for (const [letter, option] of Object.entries(threatSuite.options)) {
+    if (letter === 'A') continue
+    assert(option.status === 'proposal', `option ${letter} is not marked as a proposal`)
+  }
+})
+
+check('every inverting scenario names the option its status names', () => {
+  for (const s of threatSuite.scenarios) {
+    const m = /^inverts-when-option-([A-Z])$/.exec(s.status)
+    if (m) {
+      assert(
+        (s.options.closedBy || []).includes(m[1]),
+        `${s.id}: status names option ${m[1]} but closedBy does not`
+      )
+    }
+  }
+})
+
+check('the merge URL budget arithmetic recomputes', () => {
+  const a = threatSuite.scenarios.find(s => s.id === 'T10').arithmetic
+  const url = (param, chars, n) =>
+    a.exampleCallback +
+    '?' +
+    Array.from({length: n}, () => `${param}=` + 'a'.repeat(chars)).join('&') +
+    '&h=' +
+    'a'.repeat(64)
+  const cap = (param, chars) => {
+    let n = 0
+    while (url(param, chars, n + 1).length <= a.budgetChars) n++
+    return n
+  }
+  assert(
+    4 * Math.ceil(a.encryptedK1.bytes / 3) === a.encryptedK1.base64Chars,
+    'encrypted k1 base64 length does not follow from its byte count'
+  )
+  assert(
+    url('k1', a.plaintextK1Chars, 25).length === a.mergeOf25.plaintextChars,
+    'plaintext merge length does not recompute'
+  )
+  assert(
+    url('p', a.encryptedK1.base64Chars, 25).length === a.mergeOf25.encryptedChars,
+    'encrypted merge length does not recompute'
+  )
+  assert(
+    a.mergeOf25.plaintextFits && a.mergeOf25.plaintextChars <= a.budgetChars,
+    'a plaintext merge of 25 must fit the budget'
+  )
+  assert(
+    !a.mergeOf25.encryptedFits && a.mergeOf25.encryptedChars > a.budgetChars,
+    'an encrypted merge of 25 must exceed the budget'
+  )
+  assert(
+    cap('k1', a.plaintextK1Chars) === a.mergeCapacity.plaintext,
+    'plaintext merge capacity does not recompute'
+  )
+  assert(
+    cap('p', a.encryptedK1.base64Chars) === a.mergeCapacity.encrypted,
+    'encrypted merge capacity does not recompute'
+  )
+  assert(
+    a.mergeCapacity.plaintext < a.mergeCapacity.advertisedMaxK1s,
+    'the scenario requires advertised max_k1s to exceed the plaintext capacity'
+  )
+})
+
+check('the threat suite cross-references its executable companion', () => {
+  assert(
+    threatSuite.policy.redGreen.includes('test_bearer_threat_suite_poc.py'),
+    'policy.redGreen does not name the lnurl-mint companion file'
+  )
+})
+
 console.log(
   failures === 0
     ? '\nvectors are self-consistent'

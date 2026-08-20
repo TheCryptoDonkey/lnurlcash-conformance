@@ -1,0 +1,327 @@
+{
+  "version": 1,
+  "spec": "LUD-25 draft (lnurl/luds#301)",
+  "description": "The transport/exposure scorecard from the LUD-25 design debate: candidate spec options measured against a fixed set of attacks, so proposed changes are argued against the same scenarios instead of in the abstract. NON-NORMATIVE - option A is the current draft and every other option is a proposal, marked as such below; only rows with status \"pins-current\" describe behavior the draft already requires, and rows pinning today's vulnerable behavior exist to be INVERTED by the PR landing the named option. The executable twin of this file is lnurl-mint's tests/test_bearer_threat_suite_poc.py (dni/lnurl-mint#22).",
+  "options": {
+    "A": {
+      "name": "status quo",
+      "status": "current-draft",
+      "summary": "lnurl/luds#301 as drafted"
+    },
+    "B": {
+      "name": "comment-secret",
+      "status": "proposal",
+      "summary": "A + a secret the WALLET attaches to the payRequest (LUD-12 comment), encrypted to the mint; the note's k1 becomes \"<secret>:<preimage>\" and the public LUD-21 preimage alone no longer redeems"
+    },
+    "C": {
+      "name": "?p= everywhere",
+      "status": "proposal",
+      "summary": "every k1 replaced in transport by that k1 encrypted to the mint"
+    },
+    "D": {
+      "name": "hash-keyed informational GET",
+      "status": "proposal",
+      "summary": "A + poll /w by sha256(k1), never k1"
+    },
+    "E": {
+      "name": "blinded signatures",
+      "status": "proposal",
+      "summary": "the chaumian model"
+    },
+    "F": {
+      "name": "B + D",
+      "status": "proposal",
+      "summary": "comment-secret plus the hash-keyed informational GET"
+    },
+    "G": {
+      "name": "locked notes",
+      "status": "proposal",
+      "summary": "a second asset class, not a bearer variant: redemption requires an LUD-04 signature from the LUD-05/LUD-13 linkingKey registered at mint/rotate time, over the FULL redemption request (k1, h/h2, amount/pr), so logged signatures are not replayable. Scored separately per scenario as lockedNotes, because the trades differ by note type"
+    }
+  },
+  "policy": {
+    "redGreen": "Scenarios asserting today's vulnerable behavior are pins that must be INVERTED by the PR landing the named option, mirroring the INVERTS WHEN policy in this file's executable companion, lnurl-mint's tests/test_bearer_threat_suite_poc.py (dni/lnurl-mint#22): that PR flips the pin red and forces the assertion to be rewritten against the fixed behavior. Controls (T4, T5) assert behavior that must never change.",
+    "coreTheorem": "Re-encrypting a bearer credential to the party that redeems it never shrinks its exposure set: the mint honors the ciphertext, so the ciphertext IS the note. The only encryption that helps is encrypting to the holder, which kills bearer-ness - option G takes that trade deliberately, via signatures rather than ciphertext.",
+    "seedRecoverableNotes": "A WALLET deriving note secrets deterministically (BIP85, or an LUD-05-style HMAC path plus a counter) can restore outstanding notes from the seed via hash-keyed lookup - option D doubles as the restore API. Restore covers device loss, NOT theft: anyone who copied a circulating note may have spent it long before the restore runs. One derivation convention must be pinned in the spec, or wallets fragment and restores silently miss notes."
+  },
+  "scenarios": [
+    {
+      "id": "T1",
+      "name": "verify race",
+      "kind": "attack",
+      "adversary": "anyone who saw the unpaid mint invoice - the payment hash travels inside it",
+      "steps": [
+        "observe an unpaid mint invoice and extract its payment hash",
+        "poll the LUD-21 verify endpoint until the invoice settles",
+        "take the disclosed preimage the moment it settles",
+        "rotate the note before the payer does"
+      ],
+      "currentBehavior": "succeeds when verify is on",
+      "options": {
+        "closedBy": [
+          "B",
+          "F"
+        ],
+        "notClosedBy": [
+          "C",
+          "E"
+        ],
+        "lockedNotes": "closed - the note is locked to its linkingKey from birth, so a racer holding only P cannot redeem"
+      },
+      "status": "inverts-when-option-B",
+      "notes": "C does not close it: encrypting to the mint is a public operation (mintPubkey is advertised), so the racer wraps the leaked preimage himself and replays. E does not either: the race becomes \"whoever presents P plus a blinded B first gets the signature\"."
+    },
+    {
+      "id": "T2",
+      "name": "routing-node race",
+      "kind": "attack",
+      "adversary": "every routing hop on the mint payment's path - each learns the preimage as the HTLC settles",
+      "steps": [
+        "sit on the payment path of a mint invoice",
+        "learn the preimage as the settling HTLC propagates back",
+        "rotate before the payer"
+      ],
+      "currentBehavior": "succeeds even with VERIFY_ENABLED=false - no spec endpoint is involved",
+      "options": {
+        "closedBy": [
+          "B",
+          "F"
+        ],
+        "lockedNotes": "closed for locked notes only"
+      },
+      "status": "inverts-when-option-B",
+      "notes": "The same outcome as T1 with no verify at all: the preimage leaks from the payment protocol itself, not from any endpoint."
+    },
+    {
+      "id": "T3",
+      "name": "poll-log replay",
+      "kind": "attack",
+      "adversary": "anyone reading whatever retains request URLs - a proxy, an access log, browser history",
+      "steps": [
+        "the holder polls the informational GET /w?k1=<live note>",
+        "the poll burns nothing, so the SPENDABLE k1 is left in the log",
+        "the reader replays it into a rotate"
+      ],
+      "currentBehavior": "succeeds - every value poll leaves the SPENDABLE k1 in whatever retains request URLs",
+      "options": {
+        "closedBy": [
+          "D",
+          "F"
+        ],
+        "notClosedBy": [
+          "C"
+        ],
+        "lockedNotes": "closed - a logged k1 is useless without the key"
+      },
+      "status": "inverts-when-option-D",
+      "notes": "D leaves only a harmless hash in those logs. C does not close it: a logged p redeems exactly like a logged k1 - the mint honors the ciphertext, so the ciphertext IS the note."
+    },
+    {
+      "id": "T4",
+      "name": "callback-log replay",
+      "kind": "control",
+      "adversary": "anyone reading a logged mutating callback URL",
+      "steps": [
+        "a k1 is captured from a MUTATING callback URL",
+        "the request it rode in on already burned it",
+        "replay it later"
+      ],
+      "currentBehavior": "fails with \"Invalid or already spent k1.\" - the burn from the original request is the protection",
+      "options": {
+        "holdsUnder": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E",
+          "F",
+          "G"
+        ]
+      },
+      "status": "pins-current",
+      "notes": "Must hold under every option. A replay landing in the same millisecond as the original is a plain race, not a logging problem."
+    },
+    {
+      "id": "T5",
+      "name": "note at rest",
+      "kind": "control",
+      "adversary": "whoever finds the note URL - chat history, a screenshot, a printed QR",
+      "steps": [
+        "find a note URL at rest",
+        "spend it"
+      ],
+      "currentBehavior": "the finder spends it - a note URL at rest IS the money",
+      "options": {
+        "notClosedBy": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E",
+          "F"
+        ],
+        "lockedNotes": "beaten - the only option that beats the at-rest axiom, precisely because it surrenders bearer-ness"
+      },
+      "status": "pins-current",
+      "notes": "The bearer axiom: every bearer option \"fails\" this by design, and the all-minus row is deliberate. Any future option claiming to fix at-rest exposure has to answer this scenario first."
+    },
+    {
+      "id": "T6",
+      "name": "operator correlation",
+      "kind": "property",
+      "adversary": "the mint operator",
+      "steps": [
+        "at rotate, the WALLET discloses h = sha256(new_k1)",
+        "the mint keys its storage by h",
+        "a later spend of new_k1 matches the recorded h"
+      ],
+      "currentBehavior": "issuance links to redemption - a full transaction graph at the operator",
+      "options": {
+        "closedBy": [
+          "E"
+        ],
+        "notClosedBy": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "F"
+        ],
+        "lockedNotes": "open - the operator knows exactly which key owns which notes"
+      },
+      "status": "privacy-axis",
+      "notes": "h-preimages give log confidentiality (T4) but not unlinkability from the operator; only blinded issuance closes this."
+    },
+    {
+      "id": "T7",
+      "name": "legacy LUD-03 melt",
+      "kind": "property",
+      "adversary": "none - a compatibility property",
+      "steps": [
+        "a wallet that knows nothing of LNURLcash melts a note to a BOLT-11 pr, as plain LUD-03"
+      ],
+      "currentBehavior": "works - the note melts to a BOLT-11 pr as plain LUD-03",
+      "options": {
+        "preservedBy": [
+          "A",
+          "B",
+          "D",
+          "E",
+          "F"
+        ],
+        "brokenBy": [
+          "C"
+        ],
+        "lockedNotes": "broken - a plain LUD-03 wallet cannot lnurl-auth, so locked notes have no legacy story"
+      },
+      "status": "pins-current",
+      "notes": "C breaks it because legacy wallets cannot encrypt - unless mixed mode re-admits plaintext k1, which voids C's only claim."
+    },
+    {
+      "id": "T8",
+      "name": "first-contact offline verify",
+      "kind": "gap",
+      "adversary": "an attacker who self-signs a note and supplies their own key",
+      "steps": [
+        "a recipient who has never interacted with this mint receives a note",
+        "it has no mintPubkey on record, so it cannot verify the note's sig offline",
+        "embedding the pubkey in the note URL proves nothing - an attacker self-signs and supplies their own key"
+      ],
+      "currentBehavior": "no offline verification on first contact - a spec-level gap, no endpoint to hit",
+      "options": {
+        "closedBy": []
+      },
+      "status": "spec-gap",
+      "notes": "No option on the scorecard addresses this; it needs a key-distribution story, not a transport change."
+    },
+    {
+      "id": "T9",
+      "name": "comment silently ignored",
+      "kind": "gap",
+      "adversary": "none - a silent downgrade hazard, not an attacker",
+      "steps": [
+        "a wallet already sending a LUD-12 comment calls the payRequest callback",
+        "the callback takes no comment param and unknown query params are dropped silently",
+        "the wallet gets a bare k1=P note with verify advertised anyway"
+      ],
+      "currentBehavior": "a silent downgrade with no signal to the wallet",
+      "options": {
+        "closedBy": [
+          "B",
+          "F"
+        ]
+      },
+      "status": "inverts-when-option-B",
+      "notes": "Option B must define semantics - fail-closed (reject the callback) or fallback (k1=P, no verify for that invoice) - never silent."
+    },
+    {
+      "id": "T10",
+      "name": "merge URL budget",
+      "kind": "property",
+      "adversary": "none - pure URL arithmetic",
+      "steps": [
+        "build a merge callback carrying one k1 per input note plus h for the result",
+        "compare its length against the ~2000-character practical GET budget LUD-12 itself notes"
+      ],
+      "currentBehavior": "a merge of 25 notes fits in plaintext hex k1s (64 chars each)",
+      "options": {
+        "preservedBy": [
+          "A",
+          "B",
+          "D",
+          "E",
+          "F"
+        ],
+        "brokenBy": [
+          "C"
+        ]
+      },
+      "arithmetic": {
+        "budgetChars": 2000,
+        "exampleCallback": "https://mint.example/w/cb",
+        "plaintextK1Chars": 64,
+        "encryptedK1": {
+          "layout": "33-byte ephemeral pubkey + 12-byte nonce + 32-byte ciphertext + 16-byte tag",
+          "bytes": 93,
+          "base64Chars": 124
+        },
+        "mergeOf25": {
+          "plaintextChars": 1792,
+          "plaintextFits": true,
+          "encryptedChars": 3267,
+          "encryptedFits": false
+        },
+        "mergeCapacity": {
+          "plaintext": 28,
+          "encrypted": 15,
+          "advertisedMaxK1s": 100
+        }
+      },
+      "status": "arithmetic",
+      "notes": "The same merge with every k1 swapped for an encrypted-to-the-mint blob (option C) does not fit. max_k1s=100 is unreachable in BOTH variants under the budget - plaintext caps at 28, blobs at 15 - so C would halve the merge ceiling in exchange for nothing, per T1/T2/T3."
+    },
+    {
+      "id": "T11",
+      "name": "offline handoff",
+      "kind": "property",
+      "adversary": "none - the bearer property itself",
+      "steps": [
+        "hand a bearer note to its next holder with no mint contact at handoff time"
+      ],
+      "currentBehavior": "works - the spec's Offline circulation section",
+      "options": {
+        "preservedBy": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E",
+          "F"
+        ],
+        "lockedNotes": "lost - transfer requires an online re-lock via the mint"
+      },
+      "status": "pins-current",
+      "notes": "Structural, no endpoint. Locked notes are registered claims, not cash; the bearer core and locked notes are complements, not competitors."
+    }
+  ]
+}

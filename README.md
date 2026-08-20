@@ -57,6 +57,7 @@ for (const c of cases) {
 | `withdraw-info.json` | the informational GET, and what makes a response invalid |
 | `pay-request.json` | minting, LUD-11 disposable, LUD-21 verify |
 | `lifecycle.json` | behavioural requirements, as scenarios to drive |
+| `threat-suite.json` | the transport/exposure scorecard — candidate spec options against fixed attacks (non-normative) |
 
 Regenerate with `npm run generate`; check them with `npm test`, which
 verifies every digest recomputes, every declared signature really does
