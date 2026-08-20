@@ -4,6 +4,15 @@ Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may add or tighten checks that a previously-passing mint now fails; pin an
 exact version if you gate CI on the grade.
 
+## Unreleased
+
+- The mock mint's mint-address response now carries the node stats
+  lnurl-mint advertises: `nodeCapacity` (msat), `nodeNumChannels` and
+  `nodeNumPeers`. `nodeCapacity` is the field an implementation is most
+  likely to rename on its own side and then forget to map - lnurl-wallet
+  and lnurlcash-kit both did, and neither test caught it, because nothing
+  they tested against ever sent the wire name.
+
 ## 0.1.0 - 2026-08-20
 
 First release. Three things, usable independently.

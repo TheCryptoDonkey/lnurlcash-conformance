@@ -298,7 +298,14 @@ export const createMockMint = async (options = {}) => {
         mintPubkey: pubkey,
         nodeAlias: 'mock-mint',
         nodeUri: `${pubkey}@127.0.0.1:9735`,
-        nodeColor: '#ff9900'
+        nodeColor: '#ff9900',
+        // The node stats lnurl-mint advertises. `nodeCapacity` is msat, like
+        // every other amount, and is named without the suffix on the wire -
+        // an implementation that renames it on its own side has to map it,
+        // and one that spreads the response through will read undefined.
+        nodeCapacity: 500_000_000,
+        nodeNumChannels: 4,
+        nodeNumPeers: 6
       })
     }
 
