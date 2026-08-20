@@ -6,6 +6,8 @@ export type SignatureLayout = 'trailing' | 'leading'
 
 export type NoteState = 'outstanding' | 'pending' | 'burned'
 
+export type WithdrawLinkForm = 'lnurlw' | 'plain'
+
 export interface MockMintOptions {
   username?: string
   minSendableMsat?: number
@@ -21,6 +23,12 @@ export interface MockMintOptions {
   signatureLayout?: SignatureLayout
   /** withhold sig/sig2 entirely, as a SERVICE with no funding source does */
   signatures?: boolean
+  /**
+   * How the payRequest spells its withdrawLink. 'lnurlw' is the LUD-17
+   * scheme form (moneyer); 'plain' is the fetchable https:// URL
+   * (lnurl-mint, and the spec's diagram). Both are legal; test against both.
+   */
+  withdrawLinkForm?: WithdrawLinkForm
   /** LUD-21 verify endpoint. Off means 404, not merely unadvertised. */
   verify?: boolean
   privateKey?: string

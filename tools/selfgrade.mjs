@@ -41,6 +41,25 @@ if (good.failed > 0) {
 }
 console.log(`ok   compliant mock passes (${good.results.length} checks)`)
 
+// The other legal spelling of withdrawLink: the plain fetchable URL that
+// lnurl-mint emits. The grader must take both, and say which it saw.
+const plain = await grade({withdrawLinkForm: 'plain'})
+if (plain.failed > 0) {
+  console.error('a mint with a plain-URL withdrawLink failed grading:')
+  for (const r of plain.results.filter(r => r.status === 'fail')) {
+    console.error(`  FAIL ${r.name} - ${r.detail}`)
+  }
+  process.exit(1)
+}
+const forms = [good, plain].map(
+  r => r.results.find(x => x.name.startsWith('advertises a withdrawLink'))?.detail ?? ''
+)
+if (!forms[0].includes('lnurlw:// form') || !forms[1].includes('plain URL form')) {
+  console.error(`the grader did not report the withdrawLink form: ${JSON.stringify(forms)}`)
+  process.exit(1)
+}
+console.log('ok   plain-URL withdrawLink passes, and both forms are named in the report')
+
 const bad = await grade({echoWrongK1: true})
 if (bad.failed === 0) {
   console.error('a mint echoing the wrong k1 PASSED - the grader is blind')

@@ -4,6 +4,24 @@ Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may add or tighten checks that a previously-passing mint now fails; pin an
 exact version if you gate CI on the grade.
 
+## Unreleased
+
+- `withdrawLink` has two legal spellings in the wild. LUD-25 calls it "a
+  raw, non bech32-encoded URL as described in LUD-17", and LUD-17 describes
+  both the `lnurlw://` scheme and the plain `https://` URL it stands for.
+  lnurl-mint (and the spec's own diagram) emit `https://mint.example/w`;
+  moneyer emits `lnurlw://moneyer.dev/w`. The mock mint only ever served
+  the second, so a client that broke on the reference mint's form would
+  still have passed here.
+  - The mock mint takes `withdrawLinkForm: 'plain'` to serve the
+    `https://` spelling. Default unchanged.
+  - `pay-request.json` gains accepted cases for the plain form and for an
+    onion host; a parser must pass both through untouched.
+  - The grader accepts either spelling, rejects a bech32 `lnurl1...` value,
+    and names the form in its report. Its three ad-hoc `lnurlw://` rewrites
+    are now one exported `fromLud17`.
+  - Selfgrade runs the compliant mock in both forms.
+
 ## 0.1.1 - 2026-08-20
 
 - The mock mint's mint-address response now carries the node stats

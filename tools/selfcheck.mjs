@@ -292,6 +292,12 @@ for (const name of ['withdraw-info.json', 'pay-request.json']) {
   })
 }
 
+check('pay-request.json covers both legal withdrawLink spellings', () => {
+  const links = load('pay-request.json').accepted.map(c => c.withdrawLink).filter(Boolean)
+  assert(links.some(l => /^lnurlw:\/\//.test(l)), 'no lnurlw:// withdrawLink case')
+  assert(links.some(l => /^https:\/\//.test(l)), 'no plain https:// withdrawLink case')
+})
+
 // ---- lifecycle ----
 
 const lifecycle = load('lifecycle.json')

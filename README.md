@@ -94,6 +94,7 @@ must survive:
 | `--roundFeeToSat` | rounds the withheld fee up to a whole sat — the note mints short of the formula |
 | `--verifyLeaksEarly` | serves the preimage from verify before settlement — the bearer secret, to anyone with the hash |
 | `--verify=false` | no LUD-21 endpoint at all, not merely unadvertised |
+| `--withdrawLinkForm=plain` | spells `withdrawLink` as the plain `https://` URL lnurl-mint emits, instead of the `lnurlw://` form moneyer emits. Both are legal; a client has to take both |
 
 As a library, for your own test suite:
 
@@ -116,7 +117,8 @@ actually did rather than what it said.
 npx lnurlcash-conform mint@example.com
 ```
 
-Read-only by default: resolves the payRequest, checks the `withdrawLink`,
+Read-only by default: resolves the payRequest, checks the `withdrawLink`
+(either legal spelling, and the report says which one the mint uses),
 the fee advertisement, invoice amounts, that LUD-21 verify serves no
 preimage before settlement (on a mint that value IS the bearer secret, and
 everyone on the payment's route knows the payment hash), whether an

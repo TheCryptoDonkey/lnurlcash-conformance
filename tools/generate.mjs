@@ -980,6 +980,34 @@ const payRequest = {
       mintFee: null
     },
     {
+      name: 'withdrawLink in plain URL form',
+      body: {
+        tag: 'payRequest',
+        callback: 'https://mint.example/p/cb',
+        minSendable: 1000,
+        maxSendable: 100000000,
+        metadata: meta([['text/plain', 'a mint'], ['text/identifier', 'mint@mint.example']]),
+        withdrawLink: 'https://mint.example/w'
+      },
+      withdrawLink: 'https://mint.example/w',
+      mintFee: null,
+      why: 'LUD-25 says a raw, non-bech32 URL "as described in LUD-17", and LUD-17 describes both the lnurlw:// scheme and the plain URL it stands for. lnurl-mint, and the spec diagram, use this form; moneyer uses lnurlw://. A WALLET MUST accept either, unchanged, and resolve it through the same LUD-17 rule as any other input'
+    },
+    {
+      name: 'withdrawLink on an onion service',
+      body: {
+        tag: 'payRequest',
+        callback: 'http://mintmintmintmintmintmintmintmintmintmintmintmintmintmi.onion/p/cb',
+        minSendable: 1000,
+        maxSendable: 100000000,
+        metadata: meta([['text/plain', 'a mint']]),
+        withdrawLink: 'lnurlw://mintmintmintmintmintmintmintmintmintmintmintmintmintmi.onion/w'
+      },
+      withdrawLink: 'lnurlw://mintmintmintmintmintmintmintmintmintmintmintmintmintmi.onion/w',
+      mintFee: null,
+      why: 'the parser passes the link through; resolution to http:// happens when a note is built from it (see note-url.json build)'
+    },
+    {
       name: 'with an advertised fee',
       body: {
         tag: 'payRequest',

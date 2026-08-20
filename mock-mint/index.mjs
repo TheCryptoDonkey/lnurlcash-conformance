@@ -59,6 +59,12 @@ const DEFAULTS = {
   signatureLayout: 'trailing',
   // withhold sig/sig2 entirely, as a SERVICE with no funding source does
   signatures: true,
+  // how the payRequest spells its withdrawLink. 'lnurlw' is the LUD-17
+  // scheme form moneyer emits; 'plain' is the fetchable https:// URL
+  // lnurl-mint emits and the spec's diagram shows. Both are legal raw,
+  // non-bech32 URLs, and a WALLET that handles one but not the other
+  // fails against half the public mints. Run your client against both.
+  withdrawLinkForm: 'lnurlw',
   // LUD-21 verify endpoint. Off means 404, not merely unadvertised: the
   // preimage it serves IS a bearer secret, so an operator needs a real
   // off switch.
@@ -276,7 +282,8 @@ export const createMockMint = async (options = {}) => {
         minSendable: minSendableMsat,
         maxSendable: opts.maxSendableMsat,
         metadata: JSON.stringify(metadata),
-        withdrawLink: `lnurlw://${req.headers.host}/w`,
+        withdrawLink:
+          opts.withdrawLinkForm === 'plain' ? `${origin}/w` : `lnurlw://${req.headers.host}/w`,
         disposable: false
       })
     }

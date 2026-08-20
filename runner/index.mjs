@@ -42,6 +42,19 @@ const verifySignature = (k1, amountMsat, signatureHex, pubkeyHex) => {
   return false
 }
 
+// LUD-17: lnurlw://host/path is https://host/path, or http:// when the host
+// is an onion service (the spec) or loopback (development). A plain
+// https:// or http:// URL passes through untouched, so a caller can hand
+// this either form a SERVICE emits.
+export const fromLud17 = value => {
+  const v = String(value).trim()
+  if (!/^lnurl[wpc]:\/\//i.test(v)) return v
+  const rest = v.slice(v.indexOf('://') + 3)
+  const host = rest.split(/[/?#]/, 1)[0].replace(/:\d+$/, '').toLowerCase()
+  const plain = ['localhost', '127.0.0.1', '0.0.0.0'].includes(host) || host.endsWith('.onion')
+  return (plain ? 'http://' : 'https://') + rest
+}
+
 const isAllowedUrl = value => {
   let url
   try {
@@ -187,9 +200,21 @@ export const gradeMint = async (payUrl, report) => {
       typeof pay.withdrawLink === 'string',
       'no withdrawLink - this is an ordinary payRequest, not an LNURLcash mint'
     )
-    const resolved = pay.withdrawLink.replace(/^lnurlw:\/\//i, 'https://')
-    assert(isAllowedUrl(resolved), `withdrawLink is not fetchable: ${pay.withdrawLink}`)
-    return pay.withdrawLink
+    const link = pay.withdrawLink.trim()
+    assert(
+      !/^lnurl1/i.test(link),
+      'withdrawLink is bech32-encoded - LUD-25 wants the raw URL, not an LNURL'
+    )
+    // Both forms are in the wild: lnurl-mint emits the plain https:// URL
+    // (as the spec's own diagram does), moneyer the lnurlw:// LUD-17 form.
+    // Either is a raw, non-bech32 URL; a WALLET has to take both.
+    const form = /^lnurlw:\/\//i.test(link) ? 'lnurlw:// form' : 'plain URL form'
+    assert(
+      /^(lnurlw|https?):\/\//i.test(link),
+      `withdrawLink has an unexpected scheme: ${link}`
+    )
+    assert(isAllowedUrl(fromLud17(link)), `withdrawLink is not fetchable: ${link}`)
+    return `${link} (${form})`
   })
 
   await report.check('metadata parses, and any fee advertisement is valid', async () => {
@@ -250,9 +275,7 @@ export const gradeMint = async (payUrl, report) => {
   })
 
   await report.check('reports an unknown note distinguishably', async () => {
-    const withdrawUrl = (pay.withdrawLink ?? '').replace(/^lnurlw:\/\//i, m =>
-      /localhost|127\.0\.0\.1|\.onion/.test(pay.withdrawLink) ? 'http://' : 'https://'
-    )
+    const withdrawUrl = pay.withdrawLink ? fromLud17(pay.withdrawLink) : ''
     if (!withdrawUrl) throw soft('no withdrawLink to probe')
     const url = new URL(withdrawUrl)
     url.searchParams.set('k1', bytesToHex(randomBytes(32)))
@@ -294,9 +317,7 @@ export const gradeMint = async (payUrl, report) => {
 export const gradeMintedValue = async (noteUrl, report, {mintFee = null, paidMsat}) => {
   await report.check('a minted note is worth the amount paid minus the fee', async () => {
     assert(Number.isFinite(paidMsat) && paidMsat > 0, `paidMsat was ${paidMsat}`)
-    const url = new URL(noteUrl.replace(/^lnurlw:\/\//i, m =>
-      /localhost|127\.0\.0\.1|\.onion/.test(noteUrl) ? 'http://' : 'https://'
-    ))
+    const url = new URL(fromLud17(noteUrl))
     const info = await get(url)
     assert(info.status !== 'ERROR', `refused: ${info.reason}`)
     assert(Number.isFinite(info.maxWithdrawable), 'no maxWithdrawable')
@@ -328,9 +349,7 @@ export const gradeMintedValue = async (noteUrl, report, {mintFee = null, paidMsa
 // every split's change, and a merge of n notes refunds (n - 1) base fees.
 export const gradeNote = async (noteUrl, report, options = {}) => {
   const knownBaseFee = 'mintFee' in options ? (options.mintFee?.baseFeeMsat ?? 0) : null
-  const url = new URL(noteUrl.replace(/^lnurlw:\/\//i, m =>
-    /localhost|127\.0\.0\.1|\.onion/.test(noteUrl) ? 'http://' : 'https://'
-  ))
+  const url = new URL(fromLud17(noteUrl))
   const k1 = url.searchParams.get('k1')?.toLowerCase()
   assert(k1 && /^[0-9a-f]{64}$/.test(k1), 'that note carries no 32-byte hex k1')
 
