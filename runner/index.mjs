@@ -105,6 +105,27 @@ const assert = (condition, message) => {
   if (!condition) throw new Error(message)
 }
 
+// The msat amount encoded in a bolt11 invoice's human-readable part, or
+// null when the invoice carries none (or none expressible in whole msat).
+export const invoiceAmountMsat = pr => {
+  if (typeof pr !== 'string') return null
+  const lower = pr.toLowerCase()
+  const sep = lower.lastIndexOf('1')
+  if (sep < 0) return null
+  const m = lower.slice(0, sep).match(/^ln(?:bc|tb|bcrt|tbs|sb)(\d+)?([munp])?$/)
+  if (!m?.[1]) return null
+  const per = {'': 1e11, m: 1e8, u: 1e5, n: 100, p: 0.1}[m[2] || '']
+  const msat = Number(m[1]) * per
+  return Number.isInteger(msat) ? msat : null
+}
+
+// The LUD-25 fee formula, msat-exact. The proportional term is split so it
+// cannot overflow at realistic amounts - see the fees vectors.
+const proportionalFee = (gross, ppm) =>
+  Math.floor(gross / 1e6) * ppm + Math.floor(((gross % 1e6) * ppm) / 1e6)
+export const applyMintFee = (gross, fee) =>
+  Math.max(0, gross - (fee?.baseFeeMsat ?? 0) - proportionalFee(gross, fee?.feePpm ?? 0))
+
 // The LUD-25 fee advertisement, parsed from payRequest metadata: null for
 // a fee-free (or silent) mint. The grader needs it because the spec's fee
 // algebra changes what a compliant split and merge return.
@@ -187,6 +208,7 @@ export const gradeMint = async (payUrl, report) => {
     return `${match[1]} msat + ${match[2]} ppm`
   })
 
+  let verifyUrl
   await report.check('issues an invoice for the amount requested', async () => {
     const amount = Math.max(pay.minSendable, 1000)
     const url = new URL(pay.callback)
@@ -194,12 +216,8 @@ export const gradeMint = async (payUrl, report) => {
     const body = await get(url)
     assert(body.status !== 'ERROR', `refused: ${body.reason}`)
     assert(typeof body.pr === 'string', 'no pr in the response')
-    const sep = body.pr.toLowerCase().lastIndexOf('1')
-    const hrp = body.pr.toLowerCase().slice(0, sep)
-    const m = hrp.match(/^ln(?:bc|tb|bcrt|tbs|sb)(\d+)?([munp])?$/)
-    if (m?.[1]) {
-      const per = {'': 1e11, m: 1e8, u: 1e5, n: 100, p: 0.1}[m[2] || '']
-      const invoiced = Number(m[1]) * per
+    const invoiced = invoiceAmountMsat(body.pr)
+    if (invoiced !== null) {
       assert(
         invoiced === amount,
         `asked for ${amount} msat, invoiced ${invoiced} msat`
@@ -207,8 +225,28 @@ export const gradeMint = async (payUrl, report) => {
     }
     if (body.verify) {
       assert(isAllowedUrl(body.verify), `verify URL is not fetchable: ${body.verify}`)
+      verifyUrl = body.verify
     }
     return `${amount} msat${body.verify ? ', with LUD-21 verify' : ''}`
+  })
+
+  await report.check('verify serves no secret before settlement', async () => {
+    // On a mint the invoice preimage IS the bearer secret of the note the
+    // payment will create, and everyone on the payment's route learns the
+    // payment hash. A verify endpoint that answers the hash with the
+    // preimage before settlement hands the note to whoever polls first.
+    if (!verifyUrl) throw soft('no LUD-21 verify URL to probe')
+    const body = await get(verifyUrl)
+    assert(body.status !== 'ERROR', `refused its own verify URL: ${body.reason}`)
+    assert(
+      body.settled === false,
+      `an invoice nothing has paid reports settled: ${JSON.stringify(body.settled)}`
+    )
+    assert(
+      body.preimage == null,
+      'served a preimage before settlement - on a mint that value is the bearer secret itself'
+    )
+    return 'settled: false, no preimage'
   })
 
   await report.check('reports an unknown note distinguishably', async () => {
@@ -243,6 +281,39 @@ export const gradeMint = async (payUrl, report) => {
   })
 
   return pay
+}
+
+// ---- the minted-value check ----------------------------------------------
+//
+// Read-only, but it needs something the runner cannot make on its own: a
+// real payment. Given a freshly minted, not-yet-rotated note and the gross
+// msat its mint invoice was paid at, checks the note is worth exactly what
+// the LUD-25 formula says. This is where a fee implementation that works
+// in whole sats - rounding the withheld fee up - shows itself: the note
+// mints short of the formula and no other check can see it.
+export const gradeMintedValue = async (noteUrl, report, {mintFee = null, paidMsat}) => {
+  await report.check('a minted note is worth the amount paid minus the fee', async () => {
+    assert(Number.isFinite(paidMsat) && paidMsat > 0, `paidMsat was ${paidMsat}`)
+    const url = new URL(noteUrl.replace(/^lnurlw:\/\//i, m =>
+      /localhost|127\.0\.0\.1|\.onion/.test(noteUrl) ? 'http://' : 'https://'
+    ))
+    const info = await get(url)
+    assert(info.status !== 'ERROR', `refused: ${info.reason}`)
+    assert(Number.isFinite(info.maxWithdrawable), 'no maxWithdrawable')
+    const expected = applyMintFee(paidMsat, mintFee)
+    const feeText = mintFee
+      ? `${mintFee.baseFeeMsat} msat + ${mintFee.feePpm} ppm`
+      : 'no advertised fee'
+    const satRounded = expected - (expected % 1000)
+    assert(
+      info.maxWithdrawable === expected,
+      `paid ${paidMsat} msat against ${feeText}: the formula nets ${expected} msat, the note holds ${info.maxWithdrawable}` +
+        (info.maxWithdrawable === satRounded && satRounded !== expected
+          ? ' - consistent with the fee being rounded up to a whole sat, which the formula does not allow'
+          : '')
+    )
+    return `${paidMsat} msat paid -> ${info.maxWithdrawable} msat note (${feeText})`
+  })
 }
 
 // ---- mutating checks ------------------------------------------------------

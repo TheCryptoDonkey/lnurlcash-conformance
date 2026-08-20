@@ -193,6 +193,15 @@
       },
       "expect": 2099997900000000,
       "why": "same magnitude, ordinary fee - still past the naive-multiply limit"
+    },
+    {
+      "grossMsat": 500000,
+      "fee": {
+        "baseFeeMsat": 1000,
+        "feePpm": 1000
+      },
+      "expect": 498500,
+      "why": "nets 498500 msat. A fee implementation that works in whole sats rounds the withheld fee up to 2000 msat here and mints a 498000 msat note - half a sat short of conformant. The formula is msat-exact; a minted note is worth apply(gross) to the msat"
     }
   ],
   "grossUp": [

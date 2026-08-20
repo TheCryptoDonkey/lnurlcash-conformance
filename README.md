@@ -90,6 +90,8 @@ must survive:
 | `--slowMs=N` | delays every response |
 | `--sunset` | refuses anything that grows its liabilities |
 | `--baseFeeMsat=N --feePpm=N` | advertises and withholds a mint fee |
+| `--roundFeeToSat` | rounds the withheld fee up to a whole sat — the note mints short of the formula |
+| `--verifyLeaksEarly` | serves the preimage from verify before settlement — the bearer secret, to anyone with the hash |
 | `--verify=false` | no LUD-21 endpoint at all, not merely unadvertised |
 
 As a library, for your own test suite:
@@ -114,11 +116,23 @@ npx lnurlcash-conform mint@example.com
 ```
 
 Read-only by default: resolves the payRequest, checks the `withdrawLink`,
-the fee advertisement, invoice amounts, whether an unknown note is
-reported distinguishably from a spent one, and the experimental mint
-address.
+the fee advertisement, invoice amounts, that LUD-21 verify serves no
+preimage before settlement (on a mint that value IS the bearer secret, and
+everyone on the payment's route knows the payment hash), whether an
+unknown note is reported distinguishably from a spent one, and the
+experimental mint address.
 
-The full run spends:
+One check needs a real payment, which the runner cannot make on its own.
+Given a freshly minted, never-rotated note and what its mint invoice was
+paid at, it compares the note's value against the fee formula - msat-exact,
+so a fee implementation that quietly rounds up to whole sats is caught:
+
+```bash
+npx lnurlcash-conform mint@example.com --note='lnurlw://...?k1=...' --paid=500000
+# or --pr=<the mint invoice>, when it carries an amount
+```
+
+This is still read-only. The full run spends:
 
 ```bash
 npx lnurlcash-conform mint@example.com --note='lnurlw://...?k1=...' --spend

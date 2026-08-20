@@ -479,6 +479,8 @@ const FEE_FLAT = {baseFeeMsat: 2000, feePpm: 0}
 const FEE_TINY = {baseFeeMsat: 0, feePpm: 1}
 const FEE_PCT = {baseFeeMsat: 0, feePpm: 10000}
 const FEE_HOSTILE = {baseFeeMsat: 3, feePpm: 999999}
+// the whole-sat trap: a gross where msat-exact and round-to-sat fees differ
+const FEE_SAT_TRAP = {baseFeeMsat: 1000, feePpm: 1000}
 
 const applyCase = (grossMsat, fee, why) => ({
   grossMsat,
@@ -608,6 +610,11 @@ const fees = {
       2100000000000000,
       FEE_TINY,
       'same magnitude, ordinary fee - still past the naive-multiply limit'
+    ),
+    applyCase(
+      500000,
+      FEE_SAT_TRAP,
+      'nets 498500 msat. A fee implementation that works in whole sats rounds the withheld fee up to 2000 msat here and mints a 498000 msat note - half a sat short of conformant. The formula is msat-exact; a minted note is worth apply(gross) to the msat'
     )
   ],
   grossUp: [

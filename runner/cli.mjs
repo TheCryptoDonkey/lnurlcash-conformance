@@ -1,21 +1,38 @@
 #!/usr/bin/env node
-import {createReport, gradeMint, gradeNote, parseAdvertisedMintFee, resolveMint} from './index.mjs'
+import {
+  createReport,
+  gradeMint,
+  gradeMintedValue,
+  gradeNote,
+  invoiceAmountMsat,
+  parseAdvertisedMintFee,
+  resolveMint
+} from './index.mjs'
 
 const args = process.argv.slice(2)
 const flags = new Set(args.filter(a => a.startsWith('--')))
 const positional = args.filter(a => !a.startsWith('--'))
-const noteArg = args.find(a => a.startsWith('--note='))?.slice('--note='.length)
+const value = name => args.find(a => a.startsWith(`--${name}=`))?.slice(name.length + 3)
+const noteArg = value('note')
+const paidArg = value('paid')
+const prArg = value('pr')
 
 if (positional.length === 0 && !noteArg) {
   console.error(`lnurlcash-conform - grade an LNURLcash service against LUD-25
 
-  lnurlcash-conform <mint>              read-only checks
-  lnurlcash-conform <mint> --note=<url> --spend   full checks
+  lnurlcash-conform <mint>                          read-only checks
+  lnurlcash-conform <mint> --note=<url> --paid=<msat>   + the minted-value check
+  lnurlcash-conform <mint> --note=<url> --pr=<invoice>  same, paid amount from the invoice
+  lnurlcash-conform <mint> --note=<url> --spend         + the full mutating checks
 
 <mint> may be a Lightning Address (mint@example.com), a bare domain, or a
 payRequest URL.
 
-The note checks SPEND: they burn the note given and leave its value in a
+--paid/--pr name what the note's mint invoice was paid at, and require the
+note to be freshly minted and never rotated: the check compares its value
+against the LUD-25 fee formula. It is read-only.
+
+The --spend checks SPEND: they burn the note given and leave its value in a
 fresh note printed at the end. Use a small note, and pass --spend to
 confirm you meant it.`)
   process.exit(2)
@@ -30,6 +47,24 @@ if (positional[0]) {
   pay = await gradeMint(payUrl, report)
 }
 
+const mintFee =
+  pay && typeof pay.metadata === 'string' ? parseAdvertisedMintFee(pay.metadata) : null
+
+let paidMsat = null
+if (paidArg !== undefined) {
+  paidMsat = Number(paidArg)
+} else if (prArg !== undefined) {
+  paidMsat = invoiceAmountMsat(prArg)
+  if (paidMsat === null) {
+    console.error('--pr carries no amount - pass --paid=<msat> instead')
+    process.exit(2)
+  }
+}
+
+if (noteArg && paidMsat !== null) {
+  await gradeMintedValue(noteArg, report, {mintFee, paidMsat})
+}
+
 let finished
 if (noteArg) {
   if (!flags.has('--spend')) {
@@ -37,8 +72,7 @@ if (noteArg) {
   } else {
     console.log('running the mutating checks - this spends the note given\n')
     // knowing the advertised fee makes the conservation checks exact
-    const options =
-      pay && typeof pay.metadata === 'string' ? {mintFee: parseAdvertisedMintFee(pay.metadata)} : {}
+    const options = pay && typeof pay.metadata === 'string' ? {mintFee} : {}
     finished = await gradeNote(noteArg, report, options)
   }
 }
