@@ -4,7 +4,7 @@ Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may add or tighten checks that a previously-passing mint now fails; pin an
 exact version if you gate CI on the grade.
 
-## Unreleased
+## 0.1.1 - 2026-08-20
 
 - The mock mint's mint-address response now carries the node stats
   lnurl-mint advertises: `nodeCapacity` (msat), `nodeNumChannels` and
