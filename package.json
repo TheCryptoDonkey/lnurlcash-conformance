@@ -4,6 +4,9 @@
   "description": "Language-neutral conformance vectors, an adversarial mock mint, and a grader for LNURLcash (LUD-25) implementations",
   "author": "TheCryptoDonkey",
   "license": "MIT",
+  "publishConfig": {
+    "provenance": true
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/TheCryptoDonkey/lnurlcash-conformance.git"
@@ -27,6 +30,7 @@
     "runner",
     "LICENSE",
     "README.md",
+    "CHANGELOG.md",
     "llms.txt"
   ],
   "exports": {
@@ -45,7 +49,8 @@
     "generate": "node tools/generate.mjs",
     "test": "node tools/selfcheck.mjs",
     "mint": "node mock-mint/index.mjs",
-    "check": "npm run generate && git diff --exit-code vectors/ && npm test && node tools/selfgrade.mjs"
+    "check": "npm run generate && git diff --exit-code vectors/ && npm test && node tools/selfgrade.mjs",
+    "prepublishOnly": "npm run check"
   },
   "dependencies": {
     "@noble/curves": "^2.3.0",
