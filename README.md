@@ -97,6 +97,21 @@ must survive:
 | `--verify=false` | no LUD-21 endpoint at all, not merely unadvertised |
 | `--withdrawLinkForm=lnurlw` | spells `withdrawLink` as `lnurlw://host/w` instead of the plain `https://host/w` the reference mint emits. Both are legal; a client has to take both |
 
+Three optional extensions are outside LUD-25 and outside that table,
+because none of them is misbehaviour. All are absent or off unless you ask
+for them, so a mock started with no options answers exactly what it always
+answered:
+
+| Flag | What it does |
+| --- | --- |
+| `--name --description --contact --tosUrl --motd --version` | mint info on the experimental discovery endpoint: who runs this, how to reach them, the terms, and what the operator wants holders to know today |
+| `--baseFeeMsat --feePpm` | also publishes `fees: {baseFeeMsat, feePpm}` on that endpoint, the structured twin of the fee line in the payRequest metadata |
+| `--stats` | serves `GET /stats`: what the mint owes, what is in flight, what the node holds, and the coverage between them |
+| `--localBalanceMsat=N` | what the node behind a stats-publishing mock claims to hold, so a mock can be told to look under-covered |
+| `--previousPubkeys=a,b` | keys this mint has signed under before, so notes issued before a rotation still verify |
+| `--previousPrivateKey=<hex>` | an old signing key the mock still holds. Its public half joins `previousPubkeys` on its own |
+| `--signWithPreviousKey` | issues every note under that old key while still advertising the new one: the mid-rotation state a mint passes through when the advertisement moves before the signer |
+
 As a library, for your own test suite:
 
 ```js
@@ -110,7 +125,9 @@ await mint.close()
 
 `mint.state` exposes `creditNote`, `noteState`, `settleMelt`, `failMelt` and
 the raw note and invoice maps, so a test can assert what the SERVICE
-actually did rather than what it said.
+actually did rather than what it said. `creditNote(k1, amount, {previousKey:
+true})` signs that one note under `previousPrivateKey`, which is how a case
+puts one note under the old signing key and the rest under the new.
 
 ## The grader
 
@@ -125,6 +142,16 @@ preimage before settlement (on a mint that value IS the bearer secret, and
 everyone on the payment's route knows the payment hash), whether an
 unknown note is reported distinguishably from a spent one, and the
 experimental mint address.
+
+Three things a mint may publish are graded softly, because none of them is
+in LUD-25: the mint info on the discovery endpoint, a `/stats` endpoint
+stating what the mint owes against what its node holds, and the signing
+keys it has used before. Publishing none of them costs nothing. Publishing
+one in the wrong shape is a warning, not a failure, because a wallet will
+try to render it and someone should say so. A mint whose node holds less
+than it owes warns too: whether it is fully backed is the operator's to
+disclose, and a mint that publishes an uncomfortable number is behaving
+better than one that publishes nothing.
 
 One check needs a real payment, which the runner cannot make on its own.
 Given a freshly minted, never-rotated note and what its mint invoice was
@@ -152,7 +179,8 @@ It burns the note it is given and prints where the value ended up. It
 checks that the informational GET is idempotent and echoes the queried
 `k1`, that the URL's own `amount` is ignored, that a rotate with no `h` is
 refused, that a rotate returns no secret, that signatures verify against the
-advertised `mintPubkey`, that split and merge conserve value - exactly,
+advertised `mintPubkey` or any key the mint still publishes as a previous
+one, that split and merge conserve value - exactly,
 under LUD-25's fee algebra, when the mint's fee advertisement is known -
 and that a burned secret cannot be replayed. It also probes three adversarial shapes a
 mint must refuse atomically: a duplicated `k1` (which a careless mint counts

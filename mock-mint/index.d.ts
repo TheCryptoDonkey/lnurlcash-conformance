@@ -62,23 +62,98 @@ export interface MockMintOptions {
   slowMs?: number
   /** reject splits and mints, as a mint winding down does */
   sunset?: boolean
+  /** non-compliant: serve the preimage from verify before settlement */
+  verifyLeaksEarly?: boolean
   /** expose /_test/ endpoints. Never enable against anything real. */
   testHooks?: boolean
+
+  // ---- optional, non-spec extensions ----
+  //
+  // None of these is in LUD-25 and none is on by default. Every one is
+  // absent from the wire unless it is set.
+
+  /** operator-facing name, on the experimental discovery endpoint */
+  name?: string
+  /** one line about the mint, on the discovery endpoint */
+  description?: string
+  /** how to reach the operator, on the discovery endpoint */
+  contact?: MintContact | string
+  /** link to the mint's terms, on the discovery endpoint */
+  tosUrl?: string
+  /** message of the day: how an operator talks to holders */
+  motd?: string
+  /** the mint software's version string */
+  version?: string
+  /**
+   * Compressed hex pubkeys this SERVICE has signed under before, so notes
+   * it already issued still verify after a signing-key rotation. Emitted
+   * only when the list is not empty. A comma-separated string is accepted
+   * so the CLI can pass one.
+   */
+  previousPubkeys?: string[] | string
+  /**
+   * An old signing key the mock still holds, so a case can issue one note
+   * under it and the rest under the current key. Its public half joins
+   * previousPubkeys automatically. A real mint that has rotated keeps only
+   * the public half.
+   */
+  previousPrivateKey?: string
+  /**
+   * Sign every note this mock issues under previousPrivateKey while still
+   * advertising the current key as mintPubkey: the mid-rotation state a
+   * mint passes through when the advertisement moves before the signer.
+   */
+  signWithPreviousKey?: boolean
+  /** serve GET /stats, the liabilities endpoint. Off means 404, as before. */
+  stats?: boolean
+  /** what the node behind a stats-publishing mock claims to hold */
+  localBalanceMsat?: number
+}
+
+export interface MintContact {
+  /** an npub */
+  nostr?: string
+  email?: string
+  url?: string
+}
+
+export interface MintLiabilities {
+  at: string
+  outstandingMsat: number
+  outstandingNotes: number
+  pendingMsat: number
+  pendingMelts: number
+  oldestPendingMeltAgeSecs: number | null
+  localBalanceMsat?: number
+  /** localBalanceMsat / outstandingMsat, 4 dp; omitted when nothing is owed */
+  coverage?: number
+  reconciledAt: string
 }
 
 export interface MockMintState {
-  notes: Map<string, {amountMsat: number; state: NoteState}>
+  notes: Map<string, {amountMsat: number; state: NoteState; pendingSince?: number}>
   invoices: Map<string, {amountMsat: number; preimage: string; settled: boolean}>
   pubkey: string
+  /** the keys this mint has signed under before, as the discovery endpoint publishes them */
+  previousPubkeys: string[]
   opts: Required<MockMintOptions>
   /**
    * Fund a note directly, bypassing the minting flow. Returns the note's
    * signature, or undefined when this mint was started with `signatures:
    * false` (as a SERVICE with no funding source behaves).
+   *
+   * Pass `{previousKey: true}` to sign it under `previousPrivateKey`
+   * instead, which is how a case puts one note under the old signing key
+   * and the rest under the new one.
    */
-  creditNote(k1: string, amountMsat: number): string | undefined
+  creditNote(
+    k1: string,
+    amountMsat: number,
+    options?: {previousKey?: boolean}
+  ): string | undefined
   noteState(k1: string): NoteState | null
   settleMelt(k1: string): void
+  failMelt(k1: string): void
 }
 
 export interface MockMint {

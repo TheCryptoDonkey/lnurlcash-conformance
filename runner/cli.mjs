@@ -73,6 +73,10 @@ if (noteArg) {
     console.log('running the mutating checks - this spends the note given\n')
     // knowing the advertised fee makes the conservation checks exact
     const options = pay && typeof pay.metadata === 'string' ? {mintFee} : {}
+    // and knowing which keys the mint has signed under keeps a note issued
+    // before a signing-key rotation from grading as a bad signature
+    const previousPubkeys = pay?.mintAddress?.previousPubkeys
+    if (Array.isArray(previousPubkeys)) options.previousPubkeys = previousPubkeys
     finished = await gradeNote(noteArg, report, options)
   }
 }

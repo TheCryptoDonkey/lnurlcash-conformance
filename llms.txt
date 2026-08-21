@@ -38,6 +38,16 @@ serverGeneratedSecrets, meltNeverSettles, meltAlwaysFails, slowMs, sunset,
 baseFeeMsat, feePpm, verify=false, withdrawLinkForm=lnurlw (the lnurlw://
 spelling of withdrawLink; default is the plain https://, as lnurl-mint).
 
+Optional extensions, all outside LUD-25, all absent or off by default:
+name, description, contact, tosUrl, motd, version (mint info on
+/.well-known/lnurlw/<user>); fees (emitted there whenever a fee is
+configured); stats=true (serves GET /stats: at, outstandingMsat,
+outstandingNotes, pendingMsat, pendingMelts, oldestPendingMeltAgeSecs,
+localBalanceMsat, coverage, reconciledAt) with localBalanceMsat to set
+what the node claims to hold; previousPrivateKey and previousPubkeys
+(signing-key rotation), plus signWithPreviousKey to issue every note under
+the old key. state.creditNote(k1, amount, {previousKey: true}) signs one.
+
 CLI: npx lnurlcash-mock-mint --port=8899  (nothing is payable)
 
 ## Grader
@@ -45,7 +55,10 @@ CLI: npx lnurlcash-mock-mint --port=8899  (nothing is payable)
 npx lnurlcash-conform mint@example.com                        read-only
 npx lnurlcash-conform mint@example.com --note=<url> --spend   full, burns the note
 
-Exit code non-zero on any failure.
+Exit code non-zero on any failure. The optional extensions are graded
+softly: a mint publishing none of them loses nothing, a published field of
+the wrong shape warns, and a signature under a key the mint publishes in
+previousPubkeys is accepted as its own.
 
 ## The signature scheme, canonically
 

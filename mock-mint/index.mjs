@@ -107,7 +107,47 @@ const DEFAULTS = {
   sunset: false,
   // expose /_test/ endpoints so out-of-process test suites can fund a
   // note and settle an invoice. Never enable against anything real.
-  testHooks: false
+  testHooks: false,
+  // ---- optional, non-spec extensions ----
+  //
+  // None of these is in LUD-25 and none is on by default. Every one is
+  // absent from the wire unless it is set, so a client that has never
+  // heard of them sees exactly the responses it saw before.
+  //
+  // Mint info on the experimental discovery endpoint: who runs this, how
+  // to reach them, what the terms are, and what the operator wants
+  // holders to know today.
+  name: undefined,
+  description: undefined,
+  // {nostr?: npub, email?: string, url?: string}, or the same as a JSON
+  // string so the CLI can pass one
+  contact: undefined,
+  tosUrl: undefined,
+  motd: undefined,
+  version: undefined,
+  // Compressed hex pubkeys this SERVICE has signed under before. A mint
+  // that rotates its signing key keeps publishing the old ones so notes
+  // it already issued still verify. Emitted only when the list is not
+  // empty; previousPrivateKey's own pubkey joins it automatically.
+  previousPubkeys: undefined,
+  // An old signing key the mock still holds, so a case can issue one note
+  // under it and the rest under the current key. Per note:
+  // state.creditNote(k1, amount, {previousKey: true}).
+  previousPrivateKey: undefined,
+  // Sign EVERY note this mock issues under previousPrivateKey while still
+  // advertising the current key as mintPubkey. That is the mid-rotation
+  // state a real mint passes through when the advertisement moves before
+  // the signer does, and it is the only way a note the mint issues on
+  // demand can carry an old key's signature.
+  signWithPreviousKey: false,
+  // Liabilities. Off means 404, exactly as before; on serves GET /stats.
+  stats: false,
+  // What the node behind a stats-publishing mock claims to hold. Read
+  // only when stats is on, and the reason a mock can be told to look
+  // under-covered.
+  localBalanceMsat: 100_000_000_000,
+  // fees are emitted on the discovery endpoint whenever one is configured
+  // (baseFeeMsat or feePpm above zero); a fee-free mint publishes nothing
 }
 
 export const createMockMint = async (options = {}) => {
@@ -117,15 +157,33 @@ export const createMockMint = async (options = {}) => {
     : hexToBytes('1111111111111111111111111111111111111111111111111111111111111111')
   const pubkey = bytesToHex(secp256k1.getPublicKey(priv, true))
 
+  // An old signing key, kept only so a case can issue a note under it. A
+  // real mint that has rotated does NOT keep the old private key on the
+  // box - verifying an old signature needs the public half and nothing
+  // more - which is why previousPubkeys can also be set on its own.
+  const previousPriv = opts.previousPrivateKey ? hexToBytes(opts.previousPrivateKey) : null
+  const asList = value =>
+    value === undefined || value === null
+      ? []
+      : Array.isArray(value)
+        ? value
+        : String(value).split(',').map(v => v.trim()).filter(Boolean)
+  const previousPubkeys = [
+    ...(previousPriv ? [bytesToHex(secp256k1.getPublicKey(previousPriv, true))] : []),
+    ...asList(opts.previousPubkeys)
+  ].filter((key, i, all) => all.indexOf(key) === i)
+  const contact =
+    typeof opts.contact === 'string' ? JSON.parse(opts.contact) : opts.contact
+
   // notes are stored by id - sha256(k1) - never by the secret itself. For a
   // freshly minted note that id is exactly the payment hash of the invoice
   // that funded it, so the preimage never needs to be persisted at all.
   const notes = new Map() // id -> {amountMsat, state: outstanding|pending|burned}
   const invoices = new Map() // paymentHash -> {amountMsat, preimage, settled}
 
-  const sign = (noteIdHex, amountMsat) => {
+  const sign = (noteIdHex, amountMsat, key = priv) => {
     if (!opts.signatures) return undefined
-    const lead = secp256k1.sign(sigDigest(noteIdHex, amountMsat), priv, {
+    const lead = secp256k1.sign(sigDigest(noteIdHex, amountMsat), key, {
       format: 'recovered',
       prehash: false
     })
@@ -133,9 +191,9 @@ export const createMockMint = async (options = {}) => {
     return bytesToHex(opts.signatureLayout === 'leading' ? lead : trailing)
   }
 
-  const mintNote = (id, amountMsat) => {
+  const mintNote = (id, amountMsat, {previousKey = opts.signWithPreviousKey} = {}) => {
     notes.set(id, {amountMsat, state: 'outstanding'})
-    return sign(id, amountMsat)
+    return sign(id, amountMsat, previousKey && previousPriv ? previousPriv : priv)
   }
 
   const applyFee = gross => {
@@ -170,8 +228,12 @@ export const createMockMint = async (options = {}) => {
     pubkey,
     opts,
     // test hooks
-    creditNote(k1, amountMsat) {
-      return mintNote(noteId(k1), amountMsat)
+    previousPubkeys,
+    // creditNote(k1, amount) is unchanged. Pass {previousKey: true} to
+    // sign the note under previousPrivateKey instead, which is how a case
+    // puts one note under the old key and the rest under the new.
+    creditNote(k1, amountMsat, options = {}) {
+      return mintNote(noteId(k1), amountMsat, options)
     },
     noteState(k1) {
       return notes.get(noteId(k1))?.state ?? null
@@ -205,7 +267,8 @@ export const createMockMint = async (options = {}) => {
       if (!k1 || !/^[0-9a-f]{64}$/.test(k1) || !Number.isFinite(amount)) {
         return fail('need k1 (32 bytes hex) and amount')
       }
-      const sig = mintNote(noteId(k1), amount)
+      const previousKey = q.get('key') === 'previous'
+      const sig = mintNote(noteId(k1), amount, {previousKey})
       return send({status: 'OK', k1, amount, sig: sig ?? null})
     }
     if (url.pathname === '/_test/settle') {
@@ -301,7 +364,7 @@ export const createMockMint = async (options = {}) => {
       if (user !== opts.username && user !== '_') {
         return send({status: 'ERROR', reason: 'Unknown user.'}, 404)
       }
-      return send({
+      const address = {
         tag: 'withdrawRequest',
         callback: `${origin}/w`,
         minWithdrawable: opts.minSendableMsat,
@@ -319,7 +382,75 @@ export const createMockMint = async (options = {}) => {
         nodeCapacity: 500_000_000,
         nodeNumChannels: 4,
         nodeNumPeers: 6
-      })
+      }
+      // Optional mint info, appended so the fields above keep their order
+      // and a mock started with no options answers byte for byte what it
+      // answered before any of this existed.
+      if (opts.name !== undefined) address.name = opts.name
+      if (opts.description !== undefined) address.description = opts.description
+      if (contact !== undefined) address.contact = contact
+      if (opts.tosUrl !== undefined) address.tosUrl = opts.tosUrl
+      if (opts.motd !== undefined) address.motd = opts.motd
+      if (opts.version !== undefined) address.version = opts.version
+      // The structured twin of the fee line in the payRequest metadata.
+      // Both are emitted; neither replaces the other.
+      if (opts.baseFeeMsat > 0 || opts.feePpm > 0) {
+        address.fees = {baseFeeMsat: opts.baseFeeMsat, feePpm: opts.feePpm}
+      }
+      if (previousPubkeys.length > 0) address.previousPubkeys = previousPubkeys
+      return send(address)
+    }
+
+    // ---- liabilities (optional, outside LUD-25) ----
+    //
+    // Notes here are not blinded, so a mint can state what it owes exactly
+    // - no epochs, no blinded sums. Off by default, and when off this
+    // falls through to the same 404 every unknown path gets.
+    if (url.pathname === '/stats' && opts.stats) {
+      let outstandingMsat = 0
+      let outstandingNotes = 0
+      let pendingMsat = 0
+      let pendingMelts = 0
+      let oldestPendingSince = null
+      for (const note of notes.values()) {
+        if (note.state === 'outstanding') {
+          outstandingMsat += note.amountMsat
+          outstandingNotes++
+        } else if (note.state === 'pending') {
+          pendingMsat += note.amountMsat
+          pendingMelts++
+          const since = note.pendingSince ?? Date.now()
+          if (oldestPendingSince === null || since < oldestPendingSince) {
+            oldestPendingSince = since
+          }
+        }
+      }
+      const at = new Date().toISOString()
+      const body = {
+        at,
+        // what the mint owes to notes it can still be asked to honour. A
+        // note mid-melt is counted under pending instead: its value is
+        // committed, not free, and it comes back if the payment fails.
+        outstandingMsat,
+        outstandingNotes,
+        pendingMsat,
+        pendingMelts,
+        oldestPendingMeltAgeSecs:
+          oldestPendingSince === null
+            ? null
+            : Math.floor((Date.now() - oldestPendingSince) / 1000)
+      }
+      if (Number.isFinite(opts.localBalanceMsat)) {
+        body.localBalanceMsat = opts.localBalanceMsat
+        // a ratio with nothing owed says nothing, so it is omitted rather
+        // than reported as infinite
+        if (outstandingMsat > 0) {
+          body.coverage =
+            Math.round((opts.localBalanceMsat / outstandingMsat) * 10_000) / 10_000
+        }
+      }
+      body.reconciledAt = at
+      return send(body)
     }
 
     // ---- LUD-06 pay callback: mint a note ----
@@ -425,6 +556,7 @@ export const createMockMint = async (options = {}) => {
       if (pr) {
         const {k1, note} = found[0]
         note.state = 'pending'
+        note.pendingSince = Date.now()
         const body = {status: 'OK'}
         // The melt's own payment preimage, which is NOT the note secret and
         // must never be conflated with it: by the time a melt proof exists
@@ -547,9 +679,20 @@ export const createMockMint = async (options = {}) => {
 // standalone
 if (import.meta.url === `file://${process.argv[1]}`) {
   const flags = {}
+  // A flag's value becomes a number only when it really is one. A 64-hex
+  // key made of nothing but digits parses as a Number and loses every
+  // digit past the seventeenth, so anything outside the safe integer
+  // range stays the string it was typed as.
+  const coerce = value => {
+    if (value === 'true') return true
+    if (value === 'false') return false
+    if (!/^-?\d+(\.\d+)?$/.test(value)) return value
+    const n = Number(value)
+    return Number.isSafeInteger(n) || (!Number.isInteger(n) && Number.isFinite(n)) ? n : value
+  }
   for (const arg of process.argv.slice(2)) {
     const [key, value = 'true'] = arg.replace(/^--/, '').split('=')
-    flags[key] = value === 'true' ? true : value === 'false' ? false : isNaN(Number(value)) ? value : Number(value)
+    flags[key] = coerce(value)
   }
   const mint = await createMockMint(flags)
   const k1 = bytesToHex(randomBytes(32))
