@@ -11,6 +11,7 @@ Plain JSON in vectors/, loadable from any language, listed in
 vectors/index.json:
 
 signature.json       offline verification, both recovery-id orderings
+derivation.json      deterministic note secrets from a BIP39 seed
 bech32.json          LUD-01 encoding
 url-admission.json   which URLs may be fetched (https, or http to loopback/.onion)
 input-resolution.json bech32, LUD-17, Lightning Address, bare domain

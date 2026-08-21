@@ -46,6 +46,7 @@ for (const c of cases) {
 | File | Covers |
 | --- | --- |
 | `signature.json` | offline verification, both recovery-id orderings, malformed input |
+| `derivation.json` | deterministic note secrets from a BIP39 seed |
 | `bech32.json` | LUD-01 encoding, round trips, corrupted checksums |
 | `url-admission.json` | which URLs may be fetched, and why `data:` must never be |
 | `input-resolution.json` | bech32, LUD-17, Lightning Addresses, bare domains |
