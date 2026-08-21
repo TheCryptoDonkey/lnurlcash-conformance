@@ -1,0 +1,300 @@
+{
+  "version": 1,
+  "spec": "LUD-25 draft (lnurl/luds#301)",
+  "description": "The decision table a server works through when a LUD-25 bearer note arrives as payment. Every field is what the server knows at that point: the host the note names, the mints it accepts, what the mint says the note is worth, the price, whether the note carries a signature and whether that signature verifies, whether the server requires one, and what state the mint reports. The order matters as much as the answers: a note wrong in two ways is refused for the first reason in order, or two servers explain the same note two different ways. The rotate that settles the note comes last of all, because it is both the ownership transfer and the double-spend check, and a server that rotates before checking the amount has taken the money and refused the request.",
+  "order": [
+    "the note URL parses and names a host",
+    "the host is one of acceptedMints",
+    "the mint is asked what the note is worth, which is where a spent or in-flight note surfaces",
+    "when requireSignature, the note carries a sig and it verifies against the mint pubkey",
+    "the value the mint reports is at least minMsat",
+    "rotate: the settlement and the double-spend check in one call"
+  ],
+  "outcomes": {
+    "accept": "the note settles and the server grants what was paid for",
+    "wrong-host": "the note is from a mint this server does not accept, or the server accepts none",
+    "spent": "the mint no longer knows the secret - somebody has already had this value",
+    "pending": "the note is mid-melt, so its value is committed but not yet gone; a server must not treat this as spent OR as available",
+    "missing-signature": "a signature was required and the note carries none",
+    "bad-signature": "a signature was required and it does not verify against the mint pubkey",
+    "insufficient": "the note is worth less than the price"
+  },
+  "hostComparison": "Hosts are compared lowercased, port included. A note from mint.example:8899 does not satisfy a server accepting mint.example, because they are not the same service.",
+  "signaturePolicy": "The signature is only consulted when the server requires one. Without requireSignature a note carrying a signature that does not verify is still accepted, and that is not a hole: the value came from asking the mint, which is authoritative, and the signature would only have saved a round trip. A server that wants offline refusal sets requireSignature.",
+  "cases": [
+    {
+      "name": "a good note at an accepted mint",
+      "noteHost": "mint.example",
+      "acceptedMints": [
+        "mint.example"
+      ],
+      "maxWithdrawableMsat": 21000,
+      "minMsat": 21000,
+      "hasSig": true,
+      "sigValid": true,
+      "requireSignature": false,
+      "noteState": "live",
+      "outcome": "accept"
+    },
+    {
+      "name": "worth more than the price",
+      "noteHost": "mint.example",
+      "acceptedMints": [
+        "mint.example"
+      ],
+      "maxWithdrawableMsat": 100000,
+      "minMsat": 21000,
+      "hasSig": true,
+      "sigValid": true,
+      "requireSignature": false,
+      "noteState": "live",
+      "outcome": "accept"
+    },
+    {
+      "name": "worth exactly the price",
+      "noteHost": "mint.example",
+      "acceptedMints": [
+        "mint.example"
+      ],
+      "maxWithdrawableMsat": 21000,
+      "minMsat": 21000,
+      "hasSig": true,
+      "sigValid": true,
+      "requireSignature": false,
+      "noteState": "live",
+      "outcome": "accept",
+      "note": "the boundary: at the price is paid, not short"
+    },
+    {
+      "name": "one msat short",
+      "noteHost": "mint.example",
+      "acceptedMints": [
+        "mint.example"
+      ],
+      "maxWithdrawableMsat": 20999,
+      "minMsat": 21000,
+      "hasSig": true,
+      "sigValid": true,
+      "requireSignature": false,
+      "noteState": "live",
+      "outcome": "insufficient"
+    },
+    {
+      "name": "no signature, and none required",
+      "noteHost": "mint.example",
+      "acceptedMints": [
+        "mint.example"
+      ],
+      "maxWithdrawableMsat": 21000,
+      "minMsat": 21000,
+      "hasSig": false,
+      "sigValid": false,
+      "requireSignature": false,
+      "noteState": "live",
+      "outcome": "accept"
+    },
+    {
+      "name": "a signature that does not verify, with none required",
+      "noteHost": "mint.example",
+      "acceptedMints": [
+        "mint.example"
+      ],
+      "maxWithdrawableMsat": 21000,
+      "minMsat": 21000,
+      "hasSig": true,
+      "sigValid": false,
+      "requireSignature": false,
+      "noteState": "live",
+      "outcome": "accept",
+      "note": "accepted: the value came from asking the mint, which is authoritative. A server that wants to refuse this sets requireSignature"
+    },
+    {
+      "name": "a signature that verifies, and one required",
+      "noteHost": "mint.example",
+      "acceptedMints": [
+        "mint.example"
+      ],
+      "maxWithdrawableMsat": 21000,
+      "minMsat": 21000,
+      "hasSig": true,
+      "sigValid": true,
+      "requireSignature": true,
+      "noteState": "live",
+      "outcome": "accept"
+    },
+    {
+      "name": "no signature, and one required",
+      "noteHost": "mint.example",
+      "acceptedMints": [
+        "mint.example"
+      ],
+      "maxWithdrawableMsat": 21000,
+      "minMsat": 21000,
+      "hasSig": false,
+      "sigValid": false,
+      "requireSignature": true,
+      "noteState": "live",
+      "outcome": "missing-signature"
+    },
+    {
+      "name": "a signature that does not verify, and one required",
+      "noteHost": "mint.example",
+      "acceptedMints": [
+        "mint.example"
+      ],
+      "maxWithdrawableMsat": 21000,
+      "minMsat": 21000,
+      "hasSig": true,
+      "sigValid": false,
+      "requireSignature": true,
+      "noteState": "live",
+      "outcome": "bad-signature"
+    },
+    {
+      "name": "a note from a mint this server does not accept",
+      "noteHost": "other.example",
+      "acceptedMints": [
+        "mint.example"
+      ],
+      "maxWithdrawableMsat": 21000,
+      "minMsat": 21000,
+      "hasSig": true,
+      "sigValid": true,
+      "requireSignature": false,
+      "noteState": "live",
+      "outcome": "wrong-host"
+    },
+    {
+      "name": "a server that accepts no mints at all",
+      "noteHost": "mint.example",
+      "acceptedMints": [],
+      "maxWithdrawableMsat": 21000,
+      "minMsat": 21000,
+      "hasSig": true,
+      "sigValid": true,
+      "requireSignature": false,
+      "noteState": "live",
+      "outcome": "wrong-host",
+      "note": "not a wildcard: a server with an empty list takes nothing"
+    },
+    {
+      "name": "the same host on a different port",
+      "noteHost": "mint.example:8899",
+      "acceptedMints": [
+        "mint.example"
+      ],
+      "maxWithdrawableMsat": 21000,
+      "minMsat": 21000,
+      "hasSig": true,
+      "sigValid": true,
+      "requireSignature": false,
+      "noteState": "live",
+      "outcome": "wrong-host",
+      "note": "a port is part of the host; these are two services, not one"
+    },
+    {
+      "name": "the same host in a different case",
+      "noteHost": "MINT.EXAMPLE",
+      "acceptedMints": [
+        "mint.example"
+      ],
+      "maxWithdrawableMsat": 21000,
+      "minMsat": 21000,
+      "hasSig": true,
+      "sigValid": true,
+      "requireSignature": false,
+      "noteState": "live",
+      "outcome": "accept",
+      "note": "hosts are compared lowercased, so this is the same service"
+    },
+    {
+      "name": "an already spent note",
+      "noteHost": "mint.example",
+      "acceptedMints": [
+        "mint.example"
+      ],
+      "maxWithdrawableMsat": 21000,
+      "minMsat": 21000,
+      "hasSig": true,
+      "sigValid": true,
+      "requireSignature": false,
+      "noteState": "spent",
+      "outcome": "spent"
+    },
+    {
+      "name": "a note mid-melt",
+      "noteHost": "mint.example",
+      "acceptedMints": [
+        "mint.example"
+      ],
+      "maxWithdrawableMsat": 21000,
+      "minMsat": 21000,
+      "hasSig": true,
+      "sigValid": true,
+      "requireSignature": false,
+      "noteState": "pending",
+      "outcome": "pending",
+      "note": "not spent and not available: the melt may still fail and hand the value back, so a server must refuse without recording it as burned"
+    },
+    {
+      "name": "spent, and from a mint this server does not accept",
+      "noteHost": "other.example",
+      "acceptedMints": [
+        "mint.example"
+      ],
+      "maxWithdrawableMsat": 21000,
+      "minMsat": 21000,
+      "hasSig": true,
+      "sigValid": true,
+      "requireSignature": false,
+      "noteState": "spent",
+      "outcome": "wrong-host",
+      "note": "the host is checked before the mint is asked anything, so this is wrong-host"
+    },
+    {
+      "name": "spent, and too small anyway",
+      "noteHost": "mint.example",
+      "acceptedMints": [
+        "mint.example"
+      ],
+      "maxWithdrawableMsat": 1,
+      "minMsat": 21000,
+      "hasSig": true,
+      "sigValid": true,
+      "requireSignature": false,
+      "noteState": "spent",
+      "outcome": "spent",
+      "note": "the mint answers before the amount is compared, so this is spent"
+    },
+    {
+      "name": "unsigned, required, and too small anyway",
+      "noteHost": "mint.example",
+      "acceptedMints": [
+        "mint.example"
+      ],
+      "maxWithdrawableMsat": 1,
+      "minMsat": 21000,
+      "hasSig": false,
+      "sigValid": false,
+      "requireSignature": true,
+      "noteState": "live",
+      "outcome": "missing-signature",
+      "note": "the signature is checked before the amount"
+    },
+    {
+      "name": "accepted from the second mint in the list",
+      "noteHost": "127.0.0.1:8899",
+      "acceptedMints": [
+        "mint.example",
+        "127.0.0.1:8899"
+      ],
+      "maxWithdrawableMsat": 21000,
+      "minMsat": 21000,
+      "hasSig": true,
+      "sigValid": true,
+      "requireSignature": false,
+      "noteState": "live",
+      "outcome": "accept"
+    }
+  ]
+}

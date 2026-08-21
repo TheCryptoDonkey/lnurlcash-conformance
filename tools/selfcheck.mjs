@@ -9,7 +9,7 @@
 import {readdirSync, readFileSync} from 'node:fs'
 import {dirname, join} from 'node:path'
 import {fileURLToPath} from 'node:url'
-import {bech32} from '@scure/base'
+import {bech32, base64urlnopad} from '@scure/base'
 import {sha256} from '@noble/hashes/sha2.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
 import {hmac} from '@noble/hashes/hmac.js'
@@ -255,6 +255,221 @@ check('every invalid bech32 input really is invalid', () => {
     }
     assert(decoded === null, `${c.input}: decoded to ${decoded}`)
   }
+})
+
+// ---- payment requests ----
+//
+// The rules are reimplemented here rather than shared with the generator:
+// a self-check that calls the same function it is checking proves only
+// that the function is deterministic.
+
+const paymentRequest = load('payment-request.json')
+
+const canonical = value => {
+  if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']'
+  if (value !== null && typeof value === 'object') {
+    return (
+      '{' +
+      Object.keys(value)
+        .filter(key => value[key] !== undefined)
+        .sort()
+        .map(key => JSON.stringify(key) + ':' + canonical(value[key]))
+        .join(',') +
+      '}'
+    )
+  }
+  return JSON.stringify(value)
+}
+
+const looksLikeNpub = value => {
+  if (typeof value !== 'string' || !value.startsWith('npub1')) return false
+  try {
+    const {prefix, words} = bech32.decode(value, 200)
+    return prefix === 'npub' && bech32.fromWords(words).length === 32
+  } catch {
+    return false
+  }
+}
+
+const readRequest = (input, now) => {
+  const prefix = paymentRequest.prefix
+  if (typeof input !== 'string' || !input.startsWith(prefix)) return {reason: 'wrong-prefix'}
+  let bytes
+  try {
+    bytes = base64urlnopad.decode(input.slice(prefix.length))
+  } catch {
+    return {reason: 'not-base64url'}
+  }
+  let request
+  try {
+    request = JSON.parse(new TextDecoder().decode(bytes))
+  } catch {
+    return {reason: 'not-json'}
+  }
+  if (request === null || typeof request !== 'object' || Array.isArray(request)) {
+    return {reason: 'not-json'}
+  }
+  if (request.v !== 1) return {reason: 'unknown-version'}
+  if (typeof request.id !== 'string' || !/^[0-9a-f]{16}$/.test(request.id)) {
+    return {reason: 'bad-id'}
+  }
+  if (typeof request.amount !== 'string' || !/^[1-9][0-9]*$/.test(request.amount)) {
+    return {reason: 'amount-not-an-integer'}
+  }
+  if (request.currency !== 'sat') return {reason: 'wrong-currency'}
+  const mints = request.methodDetails?.mints
+  if (!Array.isArray(mints) || mints.length === 0) return {reason: 'no-mints'}
+  if (
+    request.to !== undefined &&
+    !looksLikeNpub(request.to) &&
+    !(typeof request.to === 'string' && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(request.to))
+  ) {
+    return {reason: 'unroutable-to'}
+  }
+  if (request.expires !== undefined && now >= request.expires) return {reason: 'expired'}
+  return {request}
+}
+
+check('every payment request encodes to the string it declares', () => {
+  for (const c of paymentRequest.encode) {
+    assert(canonical(c.request) === c.canonical, `${c.name}: canonical form does not match`)
+    const encoded =
+      paymentRequest.prefix +
+      base64urlnopad.encode(utf8ToBytes(canonical(c.request)))
+    assert(encoded === c.encoded, `${c.name}: encoding does not match`)
+  }
+})
+
+check('canonicalisation makes key order irrelevant', () => {
+  const same = paymentRequest.encode.filter(c => c.encoded === paymentRequest.encode[0].encoded)
+  assert(same.length >= 2, 'no two differently-ordered requests encode identically')
+  const orders = same.map(c => Object.keys(c.request).join(','))
+  assert(new Set(orders).size > 1, 'the identical encodings came from identically-ordered objects')
+})
+
+check('every payment request decodes exactly as declared', () => {
+  for (const c of paymentRequest.decode) {
+    const result = readRequest(c.input, paymentRequest.evaluatedAt)
+    assert(
+      (result.reason === undefined) === c.valid,
+      `${c.name}: expected valid=${c.valid}, got ${result.reason ?? 'valid'}`
+    )
+    if (c.valid) {
+      assert(c.request !== undefined, `${c.name}: a valid case states no request`)
+      assert(
+        canonical(result.request) === canonical(c.request),
+        `${c.name}: decoded to something other than the stated request`
+      )
+    } else {
+      assert(result.reason === c.reason, `${c.name}: refused as ${result.reason}, not ${c.reason}`)
+    }
+  }
+})
+
+check('every declared refusal reason is exercised, and no other is used', () => {
+  const declared = Object.keys(paymentRequest.reasons)
+  const used = new Set(paymentRequest.decode.filter(c => !c.valid).map(c => c.reason))
+  for (const reason of used) assert(declared.includes(reason), `undeclared reason ${reason}`)
+  for (const reason of declared) assert(used.has(reason), `no case refuses with ${reason}`)
+})
+
+check('the payment request set covers what the brief asks of it', () => {
+  const valid = paymentRequest.decode.filter(c => c.valid)
+  assert(valid.length >= 2, 'too few decodable cases')
+  assert(
+    valid.some(c => c.request.memo && c.request.expires),
+    'no case carries both a memo and an expiry'
+  )
+  assert(
+    paymentRequest.encode.some(c => /[^\x00-\x7f]/.test(c.canonical)),
+    'no case carries a non-ASCII character, so nothing pins the escaping'
+  )
+  assert(Number.isInteger(paymentRequest.evaluatedAt), 'no fixed clock for the expiry cases')
+})
+
+// ---- settling a note for value ----
+
+const settle = load('settle-for-value.json')
+
+check('every settlement case follows the declared order', () => {
+  const decide = c => {
+    const accepted = c.acceptedMints.map(h => h.toLowerCase())
+    if (!accepted.includes(c.noteHost.toLowerCase())) return 'wrong-host'
+    if (c.noteState === 'spent') return 'spent'
+    if (c.noteState === 'pending') return 'pending'
+    if (c.requireSignature && !c.hasSig) return 'missing-signature'
+    if (c.requireSignature && !c.sigValid) return 'bad-signature'
+    if (c.maxWithdrawableMsat < c.minMsat) return 'insufficient'
+    return 'accept'
+  }
+  for (const c of settle.cases) {
+    assert(
+      Object.keys(settle.outcomes).includes(c.outcome),
+      `${c.name}: unknown outcome ${c.outcome}`
+    )
+    assert(decide(c) === c.outcome, `${c.name}: the order gives ${decide(c)}, not ${c.outcome}`)
+    for (const key of [
+      'noteHost',
+      'acceptedMints',
+      'maxWithdrawableMsat',
+      'minMsat',
+      'hasSig',
+      'sigValid',
+      'requireSignature',
+      'noteState'
+    ]) {
+      assert(c[key] !== undefined, `${c.name}: no ${key}`)
+    }
+  }
+})
+
+check('every settlement outcome is reachable', () => {
+  for (const outcome of Object.keys(settle.outcomes)) {
+    assert(
+      settle.cases.some(c => c.outcome === outcome),
+      `no case reaches the ${outcome} outcome`
+    )
+  }
+})
+
+check('the settlement table pins its own precedence', () => {
+  const both = settle.cases.filter(
+    c => c.noteState !== 'live' && !c.acceptedMints.includes(c.noteHost)
+  )
+  assert(
+    both.some(c => c.outcome === 'wrong-host'),
+    'nothing pins the host check as coming before the mint is asked'
+  )
+  assert(
+    settle.cases.some(
+      c => c.noteState === 'spent' && c.maxWithdrawableMsat < c.minMsat && c.outcome === 'spent'
+    ),
+    'nothing pins the mint answer as coming before the amount comparison'
+  )
+  assert(
+    settle.cases.some(
+      c =>
+        c.requireSignature &&
+        !c.hasSig &&
+        c.maxWithdrawableMsat < c.minMsat &&
+        c.outcome === 'missing-signature'
+    ),
+    'nothing pins the signature check as coming before the amount comparison'
+  )
+  assert(
+    settle.cases.some(
+      c => !c.requireSignature && c.hasSig && !c.sigValid && c.outcome === 'accept'
+    ),
+    'nothing states what an unrequired signature that does not verify does'
+  )
+  assert(
+    settle.cases.some(c => c.acceptedMints.length === 0 && c.outcome === 'wrong-host'),
+    'nothing states that an empty mint list accepts nothing'
+  )
+  assert(
+    settle.cases.some(c => c.maxWithdrawableMsat === c.minMsat && c.outcome === 'accept'),
+    'nothing pins the boundary where the note is worth exactly the price'
+  )
 })
 
 // ---- fees ----

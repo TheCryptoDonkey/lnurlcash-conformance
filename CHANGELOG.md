@@ -100,6 +100,57 @@ exact version if you gate CI on the grade.
     CLI carries it across from the discovery endpoint on its own, which
     `gradeMint` now hangs off the payRequest it returns as `mintAddress`.
 
+- New `vectors/payment-request.json`: one holder asking another for value,
+  as a string a payer's wallet can act on. Not to be confused with
+  `pay-request.json`, which is the LUD-06 payRequest a mint publishes; no
+  mint is involved in reading this one.
+  - Encoding is the NUT-18 `creqA` idiom with our own prefix:
+    `lnurlcashreq1` followed by the request canonicalised under RFC 8785
+    (JCS) and carried as unpadded base64url. Canonical because two wallets
+    building the same request must produce the same string, or the payee
+    cannot match what came back to what they asked for. One encode case is
+    the same request with its keys in a different order, encoding
+    identically, and one carries a non-ASCII memo, which JCS leaves alone
+    rather than escaping.
+  - `amount` is whole sat as a decimal string, matching what the 402
+    payment-method schemas carry; the payer sends `amount * 1000` msat
+    exactly. Sub-sat requests are not a thing.
+  - Decode cases cover the round trips, an expiry still in the future, an
+    expired one, one expiring exactly now, a bad prefix, no prefix, a
+    payload that is not base64url, a payload that is not a JSON object, an
+    unknown version, a non-integer amount in four spellings, an empty
+    mints array, no `methodDetails` at all, a `to` that is neither an npub
+    nor address-shaped, a `to` that looks like an npub but does not
+    decode, a currency that is not sat, and a malformed id. Every refusal
+    names a reason from a declared list, and every declared reason has a
+    case.
+  - The file states `evaluatedAt`, a fixed unix time the decode cases are
+    read at, so an expiry means the same thing on every run.
+
+- New `vectors/settle-for-value.json`: the decision table a server works
+  through when a bearer note arrives as payment, with the order it works
+  through it in.
+  - The order is the interesting part. Host, then what the mint says
+    (which is where a spent or in-flight note surfaces), then the
+    signature when one is required, then the value, then the rotate. A
+    note wrong in two ways is refused for the first reason in order, or
+    two servers explain the same note two different ways, and cases where
+    two things are wrong at once pin that.
+  - The rotate is deliberately last: it is both the ownership transfer and
+    the double-spend check, and a server that rotates before comparing the
+    amount has taken the money and refused the request.
+  - Outcomes are `accept`, `wrong-host`, `insufficient`, `bad-signature`,
+    `missing-signature`, `spent` and `pending`, all reachable. Also pinned:
+    hosts compare lowercased with the port included, an empty accepted-mint
+    list takes nothing rather than everything, a note worth exactly the
+    price is paid, and a signature that does not verify is accepted when
+    none was required, because the value came from asking the mint and the
+    mint is authoritative.
+
+- Self-check reimplements both decision tables rather than calling the
+  generator's, because a check that calls the function it is checking
+  proves only that the function is deterministic.
+
 - `signature.json` gains a `rotation` block: a note signed under a
   previous key with both keys published (valid), the same signature byte
   for byte with only the current key published (invalid), a

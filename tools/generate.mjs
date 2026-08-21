@@ -13,7 +13,7 @@
 import {writeFileSync, mkdirSync} from 'node:fs'
 import {dirname, join} from 'node:path'
 import {fileURLToPath} from 'node:url'
-import {bech32} from '@scure/base'
+import {bech32, base64urlnopad} from '@scure/base'
 import {sha256} from '@noble/hashes/sha2.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
 import {hmac} from '@noble/hashes/hmac.js'
@@ -1607,6 +1607,401 @@ const threatSuite = {
   ]
 }
 
+// ---- vectors: payment requests -------------------------------------------
+
+// "Send me 500 sat" as a string a payer's wallet can act on: the amount,
+// the mints the payee will take, where to deliver it, and when the ask
+// stops being live. Not to be confused with pay-request.json, which is
+// the LUD-06 payRequest a mint publishes; this is one holder asking
+// another for value, and no mint is involved in reading it.
+//
+// The encoding is the NUT-18 creqA idiom with our own prefix: a fixed
+// human-readable prefix, then the request object canonicalised under
+// RFC 8785 (JCS) and carried as unpadded base64url. Canonical because two
+// wallets building the same request must produce the same string, or a
+// payee cannot match what came back to what they asked for.
+
+const REQ_PREFIX = 'lnurlcashreq1'
+
+// RFC 8785. Object keys sorted by UTF-16 code unit, no whitespace, no
+// insignificant zeros, strings serialised as ECMAScript JSON.stringify
+// does (which leaves non-ASCII alone rather than escaping it). Every
+// value in a payment request is a string, an integer or an array of
+// strings, so this is the whole of it.
+const jcs = value => {
+  if (Array.isArray(value)) return '[' + value.map(jcs).join(',') + ']'
+  if (value !== null && typeof value === 'object') {
+    return (
+      '{' +
+      Object.keys(value)
+        .filter(key => value[key] !== undefined)
+        .sort()
+        .map(key => JSON.stringify(key) + ':' + jcs(value[key]))
+        .join(',') +
+      '}'
+    )
+  }
+  return JSON.stringify(value)
+}
+
+const encodeRequest = request =>
+  REQ_PREFIX + base64urlnopad.encode(utf8ToBytes(jcs(request)))
+
+// a payee's Nostr identity, as a real npub rather than a plausible one
+const NPUB = bech32.encode('npub', bech32.toWords(new Uint8Array(32).fill(7)), 200)
+
+// Fixed, so an expiry case means the same thing every time it is run. A
+// consumer evaluates the decode cases as if the clock read exactly this.
+const REQ_NOW = 1787000000
+const REQ_FUTURE = REQ_NOW + 3600
+const REQ_PAST = REQ_NOW - 3600
+
+const MINIMAL_REQUEST = {
+  v: 1,
+  id: '0123456789abcdef',
+  amount: '500',
+  currency: 'sat',
+  methodDetails: {mints: ['mint.example']}
+}
+
+const FULL_REQUEST = {
+  v: 1,
+  id: 'a1b2c3d4e5f60718',
+  amount: '21000',
+  currency: 'sat',
+  methodDetails: {mints: ['mint.example', '127.0.0.1:8899']},
+  to: NPUB,
+  memo: 'lunch at the café',
+  expires: REQ_FUTURE
+}
+
+const EXPIRED_REQUEST = {...FULL_REQUEST, id: 'dead0000beef0001', expires: REQ_PAST}
+
+const decodeCase = (name, input, valid, extra = {}) => ({
+  name,
+  input,
+  valid,
+  ...extra
+})
+
+const paymentRequest = {
+  version: VERSION,
+  spec: SPEC,
+  description:
+    'Payment requests: one holder asking another for value. Distinct from pay-request.json, which is the LUD-06 payRequest a mint publishes. A request names an amount in whole sat (as a decimal string, because that is what the 402 payment-method schemas carry), the mints the payee will accept a note from, optionally who to deliver it to, a memo and an expiry. Encoding is the NUT-18 creqA idiom with our own prefix: "lnurlcashreq1" followed by the request object canonicalised under RFC 8785 (JCS) and carried as unpadded base64url. Canonical, because two wallets building the same request must produce the same string or the payee cannot match what came back to what they asked for. The decode cases are evaluated as if the clock read evaluatedAt exactly, so an expiry means the same thing on every run.',
+  prefix: REQ_PREFIX,
+  encoding: {
+    canonicalisation: 'RFC 8785 (JCS)',
+    payload: 'base64url of the canonical UTF-8 JSON, no padding',
+    layout: 'prefix || base64url(JCS(request))'
+  },
+  evaluatedAt: REQ_NOW,
+  fields: {
+    v: 'protocol version, the integer 1',
+    id: '16 lowercase hex characters, the payee\'s handle on this request',
+    amount: 'whole sat as a decimal string. The payer sends amount * 1000 msat exactly; sub-sat requests are not a thing',
+    currency: 'the string "sat"',
+    methodDetails: '{mints: string[]} - the hosts a note must come from, at least one',
+    to: 'optional. An npub, or a Lightning Address shaped name@domain',
+    memo: 'optional free text, shown to the payer and carried back with the note',
+    expires: 'optional unix seconds. At or after this the request is no longer payable'
+  },
+  reasons: {
+    'wrong-prefix': 'the string does not begin with lnurlcashreq1',
+    'not-base64url': 'the payload is not decodable as unpadded base64url',
+    'not-json': 'the payload decodes to bytes that are not a JSON object',
+    'unknown-version': 'v is not 1',
+    'bad-id': 'id is not 16 lowercase hex characters',
+    'amount-not-an-integer': 'amount is not a decimal string naming a whole number of sat above zero',
+    'wrong-currency': 'currency is not "sat"',
+    'no-mints': 'methodDetails.mints is missing or empty, so no note can satisfy it',
+    'unroutable-to': 'to is present but is neither an npub nor name@domain',
+    expired: 'expires is at or before the moment the request was read'
+  },
+  encode: [
+    {
+      name: 'minimal request',
+      request: MINIMAL_REQUEST,
+      canonical: jcs(MINIMAL_REQUEST),
+      encoded: encodeRequest(MINIMAL_REQUEST)
+    },
+    {
+      name: 'request with a recipient, a memo and an expiry',
+      request: FULL_REQUEST,
+      canonical: jcs(FULL_REQUEST),
+      encoded: encodeRequest(FULL_REQUEST),
+      note: 'the memo carries a non-ASCII character on purpose: JCS leaves it alone rather than escaping it, and a canonicaliser that escapes it produces a different string for the same request'
+    },
+    {
+      name: 'keys in a different order encode identically',
+      request: {
+        methodDetails: {mints: ['mint.example']},
+        currency: 'sat',
+        amount: '500',
+        id: '0123456789abcdef',
+        v: 1
+      },
+      canonical: jcs(MINIMAL_REQUEST),
+      encoded: encodeRequest(MINIMAL_REQUEST),
+      note: 'the point of canonicalising: the same request built in any order is the same string'
+    }
+  ],
+  decode: [
+    decodeCase('minimal request round-trips', encodeRequest(MINIMAL_REQUEST), true, {
+      request: MINIMAL_REQUEST
+    }),
+    decodeCase(
+      'request with a recipient, a memo and an expiry round-trips',
+      encodeRequest(FULL_REQUEST),
+      true,
+      {request: FULL_REQUEST}
+    ),
+    decodeCase(
+      'an expiry still in the future is payable',
+      encodeRequest({...FULL_REQUEST, id: 'dead0000beef0002', expires: REQ_NOW + 1}),
+      true,
+      {request: {...FULL_REQUEST, id: 'dead0000beef0002', expires: REQ_NOW + 1}}
+    ),
+    decodeCase('expired', encodeRequest(EXPIRED_REQUEST), false, {reason: 'expired'}),
+    decodeCase(
+      'expiring exactly now is expired',
+      encodeRequest({...FULL_REQUEST, id: 'dead0000beef0003', expires: REQ_NOW}),
+      false,
+      {reason: 'expired'}
+    ),
+    decodeCase(
+      'a bad prefix',
+      'creqA' + base64urlnopad.encode(utf8ToBytes(jcs(MINIMAL_REQUEST))),
+      false,
+      {reason: 'wrong-prefix'}
+    ),
+    decodeCase(
+      'the right payload with no prefix at all',
+      base64urlnopad.encode(utf8ToBytes(jcs(MINIMAL_REQUEST))),
+      false,
+      {reason: 'wrong-prefix'}
+    ),
+    decodeCase(
+      'the payload is not base64url',
+      REQ_PREFIX + 'not base64url at all!!',
+      false,
+      {reason: 'not-base64url'}
+    ),
+    decodeCase(
+      'the payload is not a JSON object',
+      REQ_PREFIX + base64urlnopad.encode(utf8ToBytes('["a request"]')),
+      false,
+      {reason: 'not-json'}
+    ),
+    decodeCase(
+      'a version nobody has published',
+      encodeRequest({...MINIMAL_REQUEST, v: 2}),
+      false,
+      {reason: 'unknown-version'}
+    ),
+    decodeCase(
+      'a non-integer amount',
+      encodeRequest({...MINIMAL_REQUEST, amount: '500.5'}),
+      false,
+      {reason: 'amount-not-an-integer'}
+    ),
+    decodeCase(
+      'an amount in exponent notation',
+      encodeRequest({...MINIMAL_REQUEST, amount: '5e2'}),
+      false,
+      {reason: 'amount-not-an-integer'}
+    ),
+    decodeCase(
+      'an amount of zero',
+      encodeRequest({...MINIMAL_REQUEST, amount: '0'}),
+      false,
+      {reason: 'amount-not-an-integer'}
+    ),
+    decodeCase(
+      'an amount that is a number rather than a string',
+      encodeRequest({...MINIMAL_REQUEST, amount: 500}),
+      false,
+      {reason: 'amount-not-an-integer'}
+    ),
+    decodeCase(
+      'an empty mints array',
+      encodeRequest({...MINIMAL_REQUEST, methodDetails: {mints: []}}),
+      false,
+      {reason: 'no-mints'}
+    ),
+    decodeCase(
+      'no methodDetails at all',
+      encodeRequest({v: 1, id: '0123456789abcdef', amount: '500', currency: 'sat'}),
+      false,
+      {reason: 'no-mints'}
+    ),
+    decodeCase(
+      'a to that is neither an npub nor address-shaped',
+      encodeRequest({...MINIMAL_REQUEST, to: 'send it to dave'}),
+      false,
+      {reason: 'unroutable-to'}
+    ),
+    decodeCase(
+      'a to that looks like an npub but does not decode',
+      encodeRequest({...MINIMAL_REQUEST, to: 'npub1thisisnotarealkeyatall'}),
+      false,
+      {reason: 'unroutable-to'}
+    ),
+    decodeCase(
+      'a Lightning Address shaped to is fine',
+      encodeRequest({...MINIMAL_REQUEST, to: 'alice@mint.example'}),
+      true,
+      {request: {...MINIMAL_REQUEST, to: 'alice@mint.example'}}
+    ),
+    decodeCase(
+      'a currency that is not sat',
+      encodeRequest({...MINIMAL_REQUEST, currency: 'msat'}),
+      false,
+      {reason: 'wrong-currency'}
+    ),
+    decodeCase(
+      'an id that is not 16 hex characters',
+      encodeRequest({...MINIMAL_REQUEST, id: 'lunch'}),
+      false,
+      {reason: 'bad-id'}
+    ),
+    decodeCase('an empty string', '', false, {reason: 'wrong-prefix'}),
+    decodeCase('the prefix and nothing else', REQ_PREFIX, false, {reason: 'not-json'})
+  ]
+}
+
+// ---- vectors: settling a note for value ----------------------------------
+
+// What a server does when a bearer note arrives as payment. The whole of
+// it is a decision table, and the ORDER of the table is the interesting
+// part: a note that is wrong in two ways must be refused for the first
+// reason, or two servers give a payer two different explanations for the
+// same note.
+//
+// The rotate that settles the note is deliberately last. It is both the
+// ownership transfer and the double-spend check, and it must not happen
+// until every other reason to refuse has been ruled out - a server that
+// rotates first and checks the amount second has taken the money and
+// refused the request.
+
+const SETTLE_ORDER = [
+  'the note URL parses and names a host',
+  'the host is one of acceptedMints',
+  'the mint is asked what the note is worth, which is where a spent or in-flight note surfaces',
+  'when requireSignature, the note carries a sig and it verifies against the mint pubkey',
+  'the value the mint reports is at least minMsat',
+  'rotate: the settlement and the double-spend check in one call'
+]
+
+const SETTLE_OUTCOMES = {
+  accept: 'the note settles and the server grants what was paid for',
+  'wrong-host': 'the note is from a mint this server does not accept, or the server accepts none',
+  spent: 'the mint no longer knows the secret - somebody has already had this value',
+  pending: 'the note is mid-melt, so its value is committed but not yet gone; a server must not treat this as spent OR as available',
+  'missing-signature': 'a signature was required and the note carries none',
+  'bad-signature': 'a signature was required and it does not verify against the mint pubkey',
+  insufficient: 'the note is worth less than the price'
+}
+
+const settleOutcome = c => {
+  const hosts = c.acceptedMints.map(h => h.toLowerCase())
+  if (!hosts.includes(c.noteHost.toLowerCase())) return 'wrong-host'
+  if (c.noteState === 'spent') return 'spent'
+  if (c.noteState === 'pending') return 'pending'
+  if (c.requireSignature && !c.hasSig) return 'missing-signature'
+  if (c.requireSignature && !c.sigValid) return 'bad-signature'
+  if (c.maxWithdrawableMsat < c.minMsat) return 'insufficient'
+  return 'accept'
+}
+
+const settleCase = (name, overrides, note) => {
+  const c = {
+    name,
+    noteHost: 'mint.example',
+    acceptedMints: ['mint.example'],
+    maxWithdrawableMsat: 21000,
+    minMsat: 21000,
+    hasSig: true,
+    sigValid: true,
+    requireSignature: false,
+    noteState: 'live',
+    ...overrides
+  }
+  return {...c, outcome: settleOutcome(c), ...(note ? {note} : {})}
+}
+
+const settleForValue = {
+  version: VERSION,
+  spec: SPEC,
+  description:
+    'The decision table a server works through when a LUD-25 bearer note arrives as payment. Every field is what the server knows at that point: the host the note names, the mints it accepts, what the mint says the note is worth, the price, whether the note carries a signature and whether that signature verifies, whether the server requires one, and what state the mint reports. The order matters as much as the answers: a note wrong in two ways is refused for the first reason in order, or two servers explain the same note two different ways. The rotate that settles the note comes last of all, because it is both the ownership transfer and the double-spend check, and a server that rotates before checking the amount has taken the money and refused the request.',
+  order: SETTLE_ORDER,
+  outcomes: SETTLE_OUTCOMES,
+  hostComparison:
+    'Hosts are compared lowercased, port included. A note from mint.example:8899 does not satisfy a server accepting mint.example, because they are not the same service.',
+  signaturePolicy:
+    'The signature is only consulted when the server requires one. Without requireSignature a note carrying a signature that does not verify is still accepted, and that is not a hole: the value came from asking the mint, which is authoritative, and the signature would only have saved a round trip. A server that wants offline refusal sets requireSignature.',
+  cases: [
+    settleCase('a good note at an accepted mint', {}),
+    settleCase('worth more than the price', {maxWithdrawableMsat: 100000}),
+    settleCase('worth exactly the price', {maxWithdrawableMsat: 21000}, 'the boundary: at the price is paid, not short'),
+    settleCase('one msat short', {maxWithdrawableMsat: 20999}),
+    settleCase('no signature, and none required', {hasSig: false, sigValid: false}),
+    settleCase(
+      'a signature that does not verify, with none required',
+      {hasSig: true, sigValid: false},
+      'accepted: the value came from asking the mint, which is authoritative. A server that wants to refuse this sets requireSignature'
+    ),
+    settleCase('a signature that verifies, and one required', {requireSignature: true}),
+    settleCase('no signature, and one required', {requireSignature: true, hasSig: false, sigValid: false}),
+    settleCase(
+      'a signature that does not verify, and one required',
+      {requireSignature: true, sigValid: false}
+    ),
+    settleCase('a note from a mint this server does not accept', {noteHost: 'other.example'}),
+    settleCase(
+      'a server that accepts no mints at all',
+      {acceptedMints: []},
+      'not a wildcard: a server with an empty list takes nothing'
+    ),
+    settleCase(
+      'the same host on a different port',
+      {noteHost: 'mint.example:8899'},
+      'a port is part of the host; these are two services, not one'
+    ),
+    settleCase(
+      'the same host in a different case',
+      {noteHost: 'MINT.EXAMPLE'},
+      'hosts are compared lowercased, so this is the same service'
+    ),
+    settleCase('an already spent note', {noteState: 'spent'}),
+    settleCase(
+      'a note mid-melt',
+      {noteState: 'pending'},
+      'not spent and not available: the melt may still fail and hand the value back, so a server must refuse without recording it as burned'
+    ),
+    settleCase(
+      'spent, and from a mint this server does not accept',
+      {noteState: 'spent', noteHost: 'other.example'},
+      'the host is checked before the mint is asked anything, so this is wrong-host'
+    ),
+    settleCase(
+      'spent, and too small anyway',
+      {noteState: 'spent', maxWithdrawableMsat: 1},
+      'the mint answers before the amount is compared, so this is spent'
+    ),
+    settleCase(
+      'unsigned, required, and too small anyway',
+      {requireSignature: true, hasSig: false, sigValid: false, maxWithdrawableMsat: 1},
+      'the signature is checked before the amount'
+    ),
+    settleCase(
+      'accepted from the second mint in the list',
+      {noteHost: '127.0.0.1:8899', acceptedMints: ['mint.example', '127.0.0.1:8899']}
+    )
+  ]
+}
+
 // ---- write ---------------------------------------------------------------
 
 const files = [
@@ -1623,7 +2018,9 @@ const files = [
   write('withdraw-info.json', withdrawInfo),
   write('pay-request.json', payRequest),
   write('lifecycle.json', lifecycle),
-  write('threat-suite.json', threatSuite)
+  write('threat-suite.json', threatSuite),
+  write('payment-request.json', paymentRequest),
+  write('settle-for-value.json', settleForValue)
 ]
 
 write('index.json', {

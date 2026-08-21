@@ -17,6 +17,8 @@
     "withdraw-info.json",
     "pay-request.json",
     "lifecycle.json",
-    "threat-suite.json"
+    "threat-suite.json",
+    "payment-request.json",
+    "settle-for-value.json"
   ]
 }

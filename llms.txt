@@ -22,6 +22,8 @@ callbacks.json       exact query per operation
 responses.json       classifying replies incl. ambiguous outcomes
 withdraw-info.json   the informational GET
 pay-request.json     minting, LUD-11, LUD-21
+payment-request.json lnurlcashreq1: asking another holder for value
+settle-for-value.json the decision table for taking a note as payment
 lifecycle.json       behavioural scenarios
 threat-suite.json    transport/exposure scorecard, options vs attacks (non-normative)
 
@@ -72,6 +74,24 @@ Recover from digest with NO further hashing (prehash off). Verifiers MUST
 also accept recovery_id || r || s. Library layouts differ:
 @noble recid-leading; coincurve trailing; Rust secp256k1 64-byte compact +
 RecoveryId; Go btcec recid+27 leading.
+
+## Payment requests, canonically
+
+lnurlcashreq1 || base64url(JCS(request)), no padding. JCS is RFC 8785:
+keys sorted by UTF-16 code unit, no whitespace, non-ASCII left alone.
+Canonical so two wallets building the same request produce the same
+string. request = {v: 1, id: 16 hex, amount: whole sat as a DECIMAL
+STRING, currency: "sat", methodDetails: {mints: [host, ...]}, to?: npub or
+name@domain, memo?: string, expires?: unix seconds}. The payer sends
+amount * 1000 msat exactly. Refusal reasons are enumerated in the vector.
+
+## Settling a note for value, in order
+
+host in acceptedMints -> ask the mint (spent/pending surface here) ->
+signature when required -> value >= price -> rotate. The rotate is LAST:
+it is the settlement and the double-spend check in one call, and a server
+that rotates before comparing the amount has taken the money and refused
+the request. Full table in settle-for-value.json.
 
 ## Fee arithmetic
 
