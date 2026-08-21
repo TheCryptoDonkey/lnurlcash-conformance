@@ -4,7 +4,7 @@ Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may add or tighten checks that a previously-passing mint now fails; pin an
 exact version if you gate CI on the grade.
 
-## Unreleased
+## 0.1.2 - 2026-08-21
 
 - The minted-value check took a band instead of a single number, because
   it was failing the reference implementation.
