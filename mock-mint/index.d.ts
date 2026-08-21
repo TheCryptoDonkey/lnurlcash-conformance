@@ -8,6 +8,8 @@ export type NoteState = 'outstanding' | 'pending' | 'burned'
 
 export type WithdrawLinkForm = 'lnurlw' | 'plain'
 
+export type RetriedMutation = 'refuse' | 'replay'
+
 export interface MockMintOptions {
   username?: string
   minSendableMsat?: number
@@ -104,6 +106,17 @@ export interface MockMintOptions {
    * mint passes through when the advertisement moves before the signer.
    */
   signWithPreviousKey?: boolean
+  /**
+   * What a retried mutation gets. A rotate, split or merge is a GET and
+   * HTTP stacks retry a GET on a dropped connection, so a SERVICE sees
+   * the byte-identical request twice. 'refuse' (default) answers the
+   * second one as an already-spent input; 'replay' answers it with the
+   * original success, which is what stops a holder discarding a note the
+   * SERVICE really did mint. Identical means the same input k1 set, the
+   * same h, the same h2 and the same amount; anything else naming a
+   * burned input is refused exactly as before.
+   */
+  retriedMutation?: RetriedMutation
   /** serve GET /stats, the liabilities endpoint. Off means 404, as before. */
   stats?: boolean
   /** what the node behind a stats-publishing mock claims to hold */

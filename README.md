@@ -59,6 +59,7 @@ for (const c of cases) {
 | `pay-request.json` | minting, LUD-11 disposable, LUD-21 verify |
 | `payment-request.json` | `lnurlcashreq1`: one holder asking another for value |
 | `settle-for-value.json` | the decision table a server works through to take a note as payment |
+| `retried-mutation.json` | what makes a repeated mutation a retry rather than a double-spend |
 | `lifecycle.json` | behavioural requirements, as scenarios to drive |
 | `threat-suite.json` | the transport/exposure scorecard — candidate spec options against fixed attacks (non-normative) |
 
@@ -99,8 +100,8 @@ must survive:
 | `--verify=false` | no LUD-21 endpoint at all, not merely unadvertised |
 | `--withdrawLinkForm=lnurlw` | spells `withdrawLink` as `lnurlw://host/w` instead of the plain `https://host/w` the reference mint emits. Both are legal; a client has to take both |
 
-Three optional extensions are outside LUD-25 and outside that table,
-because none of them is misbehaviour. All are absent or off unless you ask
+Four behaviours are outside LUD-25 and outside that table, because none
+of them is misbehaviour. All are absent or off unless you ask
 for them, so a mock started with no options answers exactly what it always
 answered:
 
@@ -113,6 +114,7 @@ answered:
 | `--previousPubkeys=a,b` | keys this mint has signed under before, so notes issued before a rotation still verify |
 | `--previousPrivateKey=<hex>` | an old signing key the mock still holds. Its public half joins `previousPubkeys` on its own |
 | `--signWithPreviousKey` | issues every note under that old key while still advertising the new one: the mid-rotation state a mint passes through when the advertisement moves before the signer |
+| `--retriedMutation=replay` | answers a byte-identical repeat of a mutation with the original success instead of `already spent`. The default, `refuse`, is what this mock has always done |
 
 As a library, for your own test suite:
 
@@ -184,7 +186,10 @@ refused, that a rotate returns no secret, that signatures verify against the
 advertised `mintPubkey` or any key the mint still publishes as a previous
 one, that split and merge conserve value - exactly,
 under LUD-25's fee algebra, when the mint's fee advertisement is known -
-and that a burned secret cannot be replayed. It also probes three adversarial shapes a
+that a byte-identical repeat of a mutation is answered with the original
+success rather than as an already-spent input (a SHOULD, so a mint that
+has not implemented it is reported as such rather than failed), and that a
+burned secret cannot be replayed. It also probes three adversarial shapes a
 mint must refuse atomically: a duplicated `k1` (which a careless mint counts
 twice, minting money from nothing), an output hash that collides with an
 existing note id (minting over it hands the output to whoever already knows

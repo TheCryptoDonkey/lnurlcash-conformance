@@ -35,6 +35,47 @@ exact version if you gate CI on the grade.
   `seedHex`, every mnemonic validates against the English wordlist and
   produces the stated seed, and no two cases collide.
 
+- The retried mutation. Every mutation in LUD-25 is a GET, and HTTP stacks
+  retry a GET when the connection they used is dropped: Go's `net/http`
+  retries one that failed on a reused idle connection, the JDK's
+  `HttpClient` retries idempotent methods with no switch to turn it off.
+  The service therefore sees the byte-identical request twice, and by the
+  time the second arrives its inputs are burned. Answering it as an
+  already-spent input tells the holder the mutation never happened, and a
+  holder that believes it discards the only copy of a secret the service
+  really did mint a note against. Nobody is told; the money is gone.
+
+  - New `vectors/retried-mutation.json` fixes what identical means, so two
+    services do not give the same wallet two different answers to the same
+    dropped connection: the same input `k1` set (a set, so a merge naming
+    the same notes in a different order is the same merge), the same `h`,
+    the same `h2` and the same `amount`, present or absent alike. Twelve
+    cases, four of them replays and eight of them still double-spend
+    attempts, each turning on one thing being different. Anything that is
+    not a retry keeps today's refusal and today's reason string, so no
+    oracle appears for whoever holds a burned secret. Provenance is
+    recorded, never inferred: matching on "a note exists at `h`" alone
+    would let anyone holding a burned `k1` and any outstanding note id
+    pull a success out of a mint.
+
+  - Mock knob `retriedMutation`, `'refuse'` by default, which is exactly
+    what this mock has always done. `'replay'` answers a byte-identical
+    repeat with the original success. The replay path is a read: it burns
+    nothing, mints nothing and moves no balance, and the signature is
+    recomputed from the output id and amount rather than stored.
+
+  - New grader check `replays a retried mutation rather than refusing it
+    (optional)`, covering a rotate and a split so `h2` and the change
+    amount are covered too. Soft, because this is a SHOULD: a mint that
+    refuses the retry is reported as not having implemented it, not
+    failed. What is not soft is damage, so a retry that burns the output
+    or changes its value fails outright whichever answer it gives.
+
+  - The existing `refuses a replayed burn` check is untouched. It sends a
+    burned input with a *fresh* output hash, which is a genuine
+    double-spend attempt and a different request, and it still passes in
+    both modes.
+
 - Three optional extensions a mint may publish, none of them in LUD-25,
   all of them absent or off unless asked for. A mock started with no
   options answers byte for byte what it answered before, and a mint

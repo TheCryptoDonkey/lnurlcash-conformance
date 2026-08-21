@@ -24,6 +24,7 @@ withdraw-info.json   the informational GET
 pay-request.json     minting, LUD-11, LUD-21
 payment-request.json lnurlcashreq1: asking another holder for value
 settle-for-value.json the decision table for taking a note as payment
+retried-mutation.json what makes a repeat a retry, not a double-spend
 lifecycle.json       behavioural scenarios
 threat-suite.json    transport/exposure scorecard, options vs attacks (non-normative)
 
@@ -39,6 +40,10 @@ echoWrongK1, lieAboutValue, signatureLayout=leading, signatures=false,
 serverGeneratedSecrets, meltNeverSettles, meltAlwaysFails, slowMs, sunset,
 baseFeeMsat, feePpm, verify=false, withdrawLinkForm=lnurlw (the lnurlw://
 spelling of withdrawLink; default is the plain https://, as lnurl-mint).
+
+retriedMutation=replay (a byte-identical repeat of a mutation gets the
+original success back instead of "already spent"; the default 'refuse' is
+what the mock has always done).
 
 Optional extensions, all outside LUD-25, all absent or off by default:
 name, description, contact, tosUrl, motd, version (mint info on
@@ -92,6 +97,19 @@ signature when required -> value >= price -> rotate. The rotate is LAST:
 it is the settlement and the double-spend check in one call, and a server
 that rotates before comparing the amount has taken the money and refused
 the request. Full table in settle-for-value.json.
+
+## The retried mutation
+
+Every mutation is a GET, and HTTP stacks retry a GET on a dropped
+connection, so a SERVICE sees the identical request twice with its inputs
+burned the second time. Answering "already spent" makes the holder discard
+the only copy of a secret the SERVICE really did mint against. Identical =
+same input k1 SET + same h + same h2 + same amount, present or absent
+alike. Anything else naming a burned input is a double-spend and keeps
+today's refusal, so no oracle appears. Provenance is recorded, not
+inferred. The replay is a READ: nothing burns, nothing mints, the sig is
+recomputed from (output id, amount). SHOULD, not MUST: the grader reports
+it as unimplemented rather than failing. Table in retried-mutation.json.
 
 ## Fee arithmetic
 

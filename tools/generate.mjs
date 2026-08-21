@@ -1607,6 +1607,117 @@ const threatSuite = {
   ]
 }
 
+// ---- vectors: the retried mutation ---------------------------------------
+
+// Every mutation in LUD-25 is a GET, and HTTP stacks retry a GET when the
+// connection they used is dropped: Go's net/http retries one that failed
+// on a reused idle connection, the JDK's HttpClient retries idempotent
+// methods with no switch to turn it off. The SERVICE therefore sees the
+// byte-identical request twice, and by the time the second arrives its
+// inputs are burned. Answering it as an already-spent input tells the
+// holder the mutation never happened, and a holder that believes that
+// discards the only copy of a secret the SERVICE really did mint a note
+// against.
+//
+// Which makes "identical" a wire question, not an implementation detail:
+// two SERVICEs that draw the line differently give the same wallet two
+// different answers to the same dropped connection.
+
+const RETRY_IN_A = K1_A
+const RETRY_IN_B = K1_B
+const RETRY_OUT = noteId(K1_C)
+const RETRY_OUT_2 = noteId('0e'.repeat(32))
+const RETRY_OTHER = noteId('0d'.repeat(32))
+
+const sameInputs = (a, b) =>
+  a.length === b.length && [...a].sort().join(',') === [...b].sort().join(',')
+
+const retryOutcome = (recorded, retry) =>
+  sameInputs(recorded.k1, retry.k1) &&
+  recorded.h === retry.h &&
+  (recorded.h2 ?? null) === (retry.h2 ?? null) &&
+  (recorded.amount ?? null) === (retry.amount ?? null)
+    ? 'replay'
+    : 'double-spend'
+
+const retryCase = (name, recorded, retry, note) => ({
+  name,
+  recorded,
+  retry,
+  outcome: retryOutcome(recorded, retry),
+  ...(note ? {note} : {})
+})
+
+const ROTATE = {k1: [RETRY_IN_A], h: RETRY_OUT}
+const SPLIT = {k1: [RETRY_IN_A], h: RETRY_OUT, h2: RETRY_OUT_2, amount: 5000}
+const MERGE = {k1: [RETRY_IN_A, RETRY_IN_B], h: RETRY_OUT}
+
+const retriedMutation = {
+  version: VERSION,
+  spec: SPEC,
+  description:
+    'What counts as a retry of a mutation, and what is still a double-spend attempt. Every mutation in LUD-25 is a GET, and HTTP stacks retry a GET when the connection they used is dropped, so a SERVICE sees the byte-identical request twice and the second one arrives with its inputs already burned. A SERVICE that answers the retry as an already-spent input tells the holder the mutation never happened, and the holder discards the only copy of a secret the SERVICE really did mint a note against. Replaying the original success instead is a SHOULD, not a MUST: a SERVICE that has not implemented it is not broken, but a SERVICE that has must draw the line in exactly this place, or two SERVICEs give the same wallet two different answers to the same dropped connection. The replay path is a read - it burns nothing, mints nothing and moves no balance - and the signature is deterministic over the output id and amount, so it is recomputed rather than stored. Anything that is NOT a retry and names a burned input is refused exactly as an ordinary double-spend is, with the same reason string, so no oracle appears for whoever is holding a burned secret.',
+  identity: [
+    'the same input k1 set, compared as a SET: a merge naming the same notes in a different order is the same merge',
+    'the same h',
+    'the same h2, present or absent alike',
+    'the same amount, present or absent alike'
+  ],
+  provenance:
+    'Recorded, never inferred. A SERVICE links the burned inputs to the outputs they minted and matches against that. Matching on "a note exists at h" alone would let anyone holding a burned k1 and any outstanding note id pull a success out of the SERVICE.',
+  outcomes: {
+    replay:
+      'the original success, byte for byte: the same status, the same sig and sig2, and no balance moved',
+    'double-spend':
+      'refused exactly as any other attempt to spend a burned secret, with the reason string unchanged'
+  },
+  cases: [
+    retryCase('a rotate, retried unchanged', ROTATE, {...ROTATE}),
+    retryCase('a split, retried unchanged', SPLIT, {...SPLIT}),
+    retryCase('a merge, retried unchanged', MERGE, {...MERGE}),
+    retryCase(
+      'a merge retried with its inputs in the other order',
+      MERGE,
+      {k1: [RETRY_IN_B, RETRY_IN_A], h: RETRY_OUT},
+      'the inputs are a set, not a sequence: this is the same merge'
+    ),
+    retryCase(
+      'the same input with a different h',
+      ROTATE,
+      {k1: [RETRY_IN_A], h: RETRY_OTHER},
+      'this is the ordinary double-spend attempt, and the existing refusal covers it unchanged'
+    ),
+    retryCase('a split retried with a different h2', SPLIT, {...SPLIT, h2: RETRY_OTHER}),
+    retryCase(
+      'a split retried with a different amount',
+      SPLIT,
+      {...SPLIT, amount: 6000},
+      'the same outputs for a different amount is not the same request; a SERVICE that replayed it would be asked to mint two different splits over one pair of ids'
+    ),
+    retryCase(
+      'a split retried with no h2 at all',
+      SPLIT,
+      {k1: [RETRY_IN_A], h: RETRY_OUT, amount: 5000},
+      'absent is not the same as present, in either direction'
+    ),
+    retryCase('a rotate retried with an amount added', ROTATE, {...ROTATE, amount: 5000}),
+    retryCase(
+      'a split retried with h and h2 swapped',
+      SPLIT,
+      {...SPLIT, h: RETRY_OUT_2, h2: RETRY_OUT},
+      'the outputs carry different amounts, so swapping them is a different request'
+    ),
+    retryCase('a merge retried naming only one of its inputs', MERGE, {
+      k1: [RETRY_IN_A],
+      h: RETRY_OUT
+    }),
+    retryCase('a merge retried with an extra input', MERGE, {
+      k1: [RETRY_IN_A, RETRY_IN_B, K1_C],
+      h: RETRY_OUT
+    })
+  ]
+}
+
 // ---- vectors: payment requests -------------------------------------------
 
 // "Send me 500 sat" as a string a payer's wallet can act on: the amount,
@@ -2020,7 +2131,8 @@ const files = [
   write('lifecycle.json', lifecycle),
   write('threat-suite.json', threatSuite),
   write('payment-request.json', paymentRequest),
-  write('settle-for-value.json', settleForValue)
+  write('settle-for-value.json', settleForValue),
+  write('retried-mutation.json', retriedMutation)
 ]
 
 write('index.json', {
