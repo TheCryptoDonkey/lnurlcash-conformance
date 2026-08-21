@@ -6,6 +6,29 @@ exact version if you gate CI on the grade.
 
 ## Unreleased
 
+- The minted-value check took a band instead of a single number, because
+  it was failing the reference implementation.
+  - LUD-25 states the mint fee as `base_fee_msat` plus a ppm cut and says
+    nothing about rounding. dni's lnurl-mint ceilings that fee to a whole
+    sat on purpose, so the mint is "never short a sat"; moneyer is
+    msat-exact. Every public mint on the awesome list except moneyer runs
+    lnurl-mint, so the majority of live services round.
+  - The check asserted equality against the msat-exact formula, and even
+    named the rounding in its failure message as something "the formula
+    does not allow". Measured on real sats: 40,000 msat at
+    mint.forgesworn.dev with a 1000 + 1000 ppm fee credits 38,000, not
+    38,960. A clean grade was unreachable for the reference.
+  - Deciding which reading is right is not this repo's job - "either may
+    be wrong, and the LUD-25 PR is where that gets settled". So the
+    compliant answer is now the range between the two: the formula is the
+    most a holder can be credited, the sat-ceilinged fee the least. The
+    report names which one it saw.
+  - Both edges are graded, and selfgrade proves it: a msat past the
+    ceilinged fee fails, and so does crediting more than the formula. A
+    band with no edges would grade nothing. The mock's `roundFeeToSat` is
+    reclassified from a misbehaviour to the reference's behaviour, and
+    gains `extraFeeMsat` for landing outside the band deliberately.
+
 - Two refusals LUD-25 spells out were never graded. Both are reachable
   against a live mint, and both were being stepped around rather than
   tested.

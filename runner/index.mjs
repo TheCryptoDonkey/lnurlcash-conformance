@@ -321,19 +321,36 @@ export const gradeMintedValue = async (noteUrl, report, {mintFee = null, paidMsa
     const info = await get(url)
     assert(info.status !== 'ERROR', `refused: ${info.reason}`)
     assert(Number.isFinite(info.maxWithdrawable), 'no maxWithdrawable')
-    const expected = applyMintFee(paidMsat, mintFee)
+    const exact = applyMintFee(paidMsat, mintFee)
     const feeText = mintFee
       ? `${mintFee.baseFeeMsat} msat + ${mintFee.feePpm} ppm`
       : 'no advertised fee'
-    const satRounded = expected - (expected % 1000)
+    // LUD-25 gives the fee as base plus a ppm cut and says nothing about
+    // rounding, and the two live implementations read that differently:
+    // dni's lnurl-mint - the reference, and what every public mint but
+    // moneyer runs - ceilings the fee to a whole sat on purpose, moneyer
+    // is msat-exact. Grading either as a failure would be this repo
+    // picking a side the draft has not picked. So the compliant answer is
+    // a band: the formula is the most a holder can be credited, the
+    // sat-ceilinged fee the least. Anything outside is still wrong, which
+    // is what this check is for.
+    const exactFee = paidMsat - exact
+    const ceilinged = Math.max(0, paidMsat - Math.ceil(exactFee / 1000) * 1000)
     assert(
-      info.maxWithdrawable === expected,
-      `paid ${paidMsat} msat against ${feeText}: the formula nets ${expected} msat, the note holds ${info.maxWithdrawable}` +
-        (info.maxWithdrawable === satRounded && satRounded !== expected
-          ? ' - consistent with the fee being rounded up to a whole sat, which the formula does not allow'
-          : '')
+      info.maxWithdrawable <= exact,
+      `paid ${paidMsat} msat against ${feeText}: the note holds ${info.maxWithdrawable} msat, more than the ${exact} the formula allows`
     )
-    return `${paidMsat} msat paid -> ${info.maxWithdrawable} msat note (${feeText})`
+    assert(
+      info.maxWithdrawable >= ceilinged,
+      `paid ${paidMsat} msat against ${feeText}: the note holds ${info.maxWithdrawable} msat, short of ${ceilinged} - beyond even a fee ceilinged to a whole sat`
+    )
+    const how =
+      info.maxWithdrawable === exact
+        ? 'msat-exact'
+        : info.maxWithdrawable === ceilinged
+          ? 'fee ceilinged to a whole sat, as the reference mint does'
+          : 'inside the band'
+    return `${paidMsat} msat paid -> ${info.maxWithdrawable} msat note (${feeText}, ${how})`
   })
 }
 

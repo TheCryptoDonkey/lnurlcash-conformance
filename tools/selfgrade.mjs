@@ -103,12 +103,33 @@ if (exact.failed > 0) {
 }
 console.log('ok   formula-exact mint passes the minted-value check')
 
+// The reference mint ceilings its fee to a whole sat on purpose, and the
+// draft does not say whether that is right. Grading it as a failure would
+// be this repo picking a side, so the check takes a band - but the band
+// has to have a far edge, or it grades nothing at all.
 const rounded = await gradeMintFlow({roundFeeToSat: true})
-if (rounded.failed === 0) {
-  console.error('a sat-rounding mint PASSED the minted-value check - the grader is blind')
+if (rounded.failed > 0) {
+  console.error('a mint ceilinging its fee to a whole sat FAILED - that is what the reference does:')
+  for (const r of rounded.results.filter(r => r.status === 'fail')) {
+    console.error(`  FAIL ${r.name} - ${r.detail}`)
+  }
   process.exit(1)
 }
-console.log('ok   sat-rounding mint caught by the minted-value check')
+console.log('ok   sat-ceilinged fee accepted, as the reference mint charges it')
+
+const greedy = await gradeMintFlow({roundFeeToSat: true, extraFeeMsat: 1})
+if (greedy.failed === 0) {
+  console.error('a mint taking a msat beyond the ceilinged fee PASSED - the band grades nothing')
+  process.exit(1)
+}
+console.log('ok   a msat past the band still caught')
+
+const generous = await gradeMintFlow({extraFeeMsat: -1})
+if (generous.failed === 0) {
+  console.error('a mint crediting more than it advertised PASSED - the band has no near edge')
+  process.exit(1)
+}
+console.log('ok   crediting more than the formula still caught')
 
 // The two split refusals LUD-25 spells out. Both need a fee-advertising
 // mint to bite at all, so they are graded against one, and each must name
