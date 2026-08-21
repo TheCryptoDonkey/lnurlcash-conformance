@@ -13,8 +13,10 @@ exact version if you gate CI on the grade.
   moneyer emits `lnurlw://moneyer.dev/w`. The mock mint only ever served
   the second, so a client that broke on the reference mint's form would
   still have passed here.
-  - The mock mint takes `withdrawLinkForm: 'plain'` to serve the
-    `https://` spelling. Default unchanged.
+  - The mock mint now serves the plain `https://` spelling by default,
+    matching the reference mint, and takes `withdrawLinkForm: 'lnurlw'`
+    for the other. A test asserting the old `lnurlw://` default needs
+    updating (lnurlcash-kit's did).
   - `pay-request.json` gains accepted cases for the plain form and for an
     onion host; a parser must pass both through untouched.
   - The grader accepts either spelling, rejects a bech32 `lnurl1...` value,

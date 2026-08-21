@@ -24,9 +24,9 @@ export interface MockMintOptions {
   /** withhold sig/sig2 entirely, as a SERVICE with no funding source does */
   signatures?: boolean
   /**
-   * How the payRequest spells its withdrawLink. 'lnurlw' is the LUD-17
-   * scheme form (moneyer); 'plain' is the fetchable https:// URL
-   * (lnurl-mint, and the spec's diagram). Both are legal; test against both.
+   * How the payRequest spells its withdrawLink. 'plain' (default) is the
+   * fetchable https:// URL the reference mint emits and the spec's diagram
+   * shows; 'lnurlw' is the LUD-17 scheme form. Both are legal; test against both.
    */
   withdrawLinkForm?: WithdrawLinkForm
   /** LUD-21 verify endpoint. Off means 404, not merely unadvertised. */

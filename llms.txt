@@ -34,8 +34,8 @@ await mint.close()
 Misbehaviour flags: dropAfterMutation, unconfirmedMutation, malformedJson,
 echoWrongK1, lieAboutValue, signatureLayout=leading, signatures=false,
 serverGeneratedSecrets, meltNeverSettles, meltAlwaysFails, slowMs, sunset,
-baseFeeMsat, feePpm, verify=false, withdrawLinkForm=plain (the https://
-spelling of withdrawLink, as lnurl-mint; default is lnurlw://, as moneyer).
+baseFeeMsat, feePpm, verify=false, withdrawLinkForm=lnurlw (the lnurlw://
+spelling of withdrawLink; default is the plain https://, as lnurl-mint).
 
 CLI: npx lnurlcash-mock-mint --port=8899  (nothing is payable)
 

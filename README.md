@@ -94,7 +94,7 @@ must survive:
 | `--roundFeeToSat` | rounds the withheld fee up to a whole sat — the note mints short of the formula |
 | `--verifyLeaksEarly` | serves the preimage from verify before settlement — the bearer secret, to anyone with the hash |
 | `--verify=false` | no LUD-21 endpoint at all, not merely unadvertised |
-| `--withdrawLinkForm=plain` | spells `withdrawLink` as the plain `https://` URL lnurl-mint emits, instead of the `lnurlw://` form moneyer emits. Both are legal; a client has to take both |
+| `--withdrawLinkForm=lnurlw` | spells `withdrawLink` as `lnurlw://host/w` instead of the plain `https://host/w` the reference mint emits. Both are legal; a client has to take both |
 
 As a library, for your own test suite:
 
