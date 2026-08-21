@@ -50,6 +50,10 @@ export interface MockMintOptions {
   meltAlwaysFails?: boolean
   /** non-compliant: generate the replacement secret SERVICE-side and hand it back */
   serverGeneratedSecrets?: boolean
+  /** non-compliant: accept a split with no h2, generating the change secret instead of refusing */
+  acceptsMissingH2?: boolean
+  /** non-compliant: split without taking the base fee out of change, and so without its floor */
+  splitIgnoresBaseFee?: boolean
   /** delay before responding, in milliseconds */
   slowMs?: number
   /** reject splits and mints, as a mint winding down does */

@@ -402,6 +402,23 @@ export const gradeNote = async (noteUrl, report, options = {}) => {
     return body.reason
   })
 
+  await report.check('refuses a split with no h2', async () => {
+    const cb = new URL(info.callback)
+    cb.searchParams.append('k1', k1)
+    cb.searchParams.append('amount', String(Math.max(1, Math.floor(info.maxWithdrawable / 2))))
+    cb.searchParams.append('h', noteId(bytesToHex(randomBytes(32))))
+    const body = await get(cb)
+    assert(
+      body.status === 'ERROR',
+      'accepted a split with only one output hash - the change note has nowhere to go but a SERVICE-generated secret'
+    )
+    const after = new URL(url)
+    after.searchParams.set('k1', k1)
+    const still = await get(after)
+    assert(still.status !== 'ERROR', `a refused split burned the note anyway: ${still.reason}`)
+    return body.reason
+  })
+
   let current = k1
   let currentSig = null
   await report.check('rotate mints a note the service never saw the secret of', async () => {
@@ -554,6 +571,37 @@ export const gradeNote = async (noteUrl, report, options = {}) => {
       assert(output.status === 'ERROR', `a ${method} request minted its output - the mutating callback must answer GET only`)
     }
     return 'POST and OPTIONS left the note untouched'
+  })
+
+  await report.check('refuses a split whose change cannot cover the base fee', async () => {
+    if (knownBaseFee === null) throw soft('fee unknown - pass --paid to grade the fee rules')
+    if (knownBaseFee === 0) throw soft('no base fee advertised, so the rule cannot bite')
+    // Leave the change one msat short of the base fee. LUD-25 says fail the
+    // whole split rather than hand back a change note worth less than the
+    // fee that was meant to come out of it.
+    const amount = info.maxWithdrawable - knownBaseFee + 1
+    if (amount < 1 || amount >= info.maxWithdrawable) {
+      throw soft('note too small to leave change short of the base fee')
+    }
+    const cb = new URL(info.callback)
+    cb.searchParams.append('k1', current)
+    cb.searchParams.append('amount', String(amount))
+    cb.searchParams.append('h', noteId(bytesToHex(randomBytes(32))))
+    cb.searchParams.append('h2', noteId(bytesToHex(randomBytes(32))))
+    const body = await get(cb)
+    assert(
+      body.status === 'ERROR',
+      `accepted a split leaving ${info.maxWithdrawable - amount} msat of change against a ${knownBaseFee} msat base fee`
+    )
+    const after = new URL(url)
+    after.searchParams.set('k1', current)
+    const still = await get(after)
+    assert(still.status !== 'ERROR', `a refused split burned the note anyway: ${still.reason}`)
+    assert(
+      still.maxWithdrawable === info.maxWithdrawable,
+      `a refused split changed the note's value: ${info.maxWithdrawable} -> ${still.maxWithdrawable}`
+    )
+    return body.reason
   })
 
   await report.check('split conserves value', async () => {

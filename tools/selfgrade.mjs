@@ -110,6 +110,26 @@ if (rounded.failed === 0) {
 }
 console.log('ok   sat-rounding mint caught by the minted-value check')
 
+// The two split refusals LUD-25 spells out. Both need a fee-advertising
+// mint to bite at all, so they are graded against one, and each must name
+// its own check rather than merely pushing the failure count up.
+const caughtBy = (report, name) =>
+  report.results.some(r => r.status === 'fail' && r.name === name)
+
+const looseH2 = await grade({acceptsMissingH2: true, baseFeeMsat: 1000, feePpm: 1000})
+if (!caughtBy(looseH2, 'refuses a split with no h2')) {
+  console.error('a mint generating the change secret itself PASSED - the grader is blind')
+  process.exit(1)
+}
+console.log('ok   split with no h2 caught')
+
+const looseFee = await grade({splitIgnoresBaseFee: true, baseFeeMsat: 1000, feePpm: 1000})
+if (!caughtBy(looseFee, 'refuses a split whose change cannot cover the base fee')) {
+  console.error('a mint splitting past its own base fee PASSED - the grader is blind')
+  process.exit(1)
+}
+console.log('ok   split past the base fee caught')
+
 const leaky = await grade({verifyLeaksEarly: true})
 if (leaky.failed === 0) {
   console.error('a mint serving preimages before settlement PASSED - the grader is blind')

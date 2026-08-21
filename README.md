@@ -151,11 +151,23 @@ and that a burned secret cannot be replayed. It also probes three adversarial sh
 mint must refuse atomically: a duplicated `k1` (which a careless mint counts
 twice, minting money from nothing), an output hash that collides with an
 existing note id (minting over it hands the output to whoever already knows
-that id's preimage), and a split whose `h` equals `h2` (one id cannot carry
-two notes). And it replays the callback as a POST and as an OPTIONS
+that id's preimage), a split whose `h` equals `h2` (one id cannot carry
+two notes), a split naming only one output hash (a mint that accepts it is
+generating the change secret itself), and a split leaving change one msat
+short of the advertised base fee (which LUD-25 says to refuse with
+`insufficient value`, not to serve at a loss). And it replays the callback as a POST and as an OPTIONS
 preflight - real HTTP stacks send both on their own initiative, so the
 mutating endpoint must answer GET only. After every refusal it confirms the refused note is still
 spendable. Use a small note. Exit code is non-zero if anything failed.
+
+**What the grader cannot reach.** It never melts. Melting spends real sats
+against a real mint, which is not something a grading tool may decide to do,
+so `pending` on a k1 mid-melt, restoring the note when the outgoing payment
+fails, and the melt's own LUD-21 `verify` are all outside what a grade can
+say anything about. They are not unspecified and not untested: the mock mint
+implements every one of them (`meltNeverSettles`, `meltAlwaysFails`), so a
+client suite driving the mock covers the whole melt path. A clean grade
+means the read-only and non-melt mutating surface is compliant, no more.
 
 The grader shares no code with any LNURLcash library — it is written against
 `fetch` and `@noble` directly. A grader that shared an implementation with
@@ -173,6 +185,9 @@ Spec and reference implementations, all by dni, all MIT:
 - [LUD-25 draft](https://github.com/lnurl/luds/pull/301)
 - [lnurl-mint](https://github.com/dni/lnurl-mint) — the reference service
 - [lnurl-wallet](https://github.com/dni/lnurl-wallet) — the reference wallet
+
+Implementations to run these vectors against are indexed in
+[awesome-lnurlcash](https://github.com/TheCryptoDonkey/awesome-lnurlcash).
 
 Contributions of vectors are welcome, particularly from implementers who
 found a case these missed. See [CONTRIBUTING.md](CONTRIBUTING.md).
