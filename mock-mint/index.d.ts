@@ -50,6 +50,10 @@ export interface MockMintOptions {
   meltAlwaysFails?: boolean
   /** non-compliant: generate the replacement secret SERVICE-side and hand it back */
   serverGeneratedSecrets?: boolean
+  /** ceiling the mint fee to a whole sat, as dni's lnurl-mint does; compliant */
+  roundFeeToSat?: boolean
+  /** withhold this many msat on top of the fee, landing outside the compliant band */
+  extraFeeMsat?: number
   /** non-compliant: accept a split with no h2, generating the change secret instead of refusing */
   acceptsMissingH2?: boolean
   /** non-compliant: split without taking the base fee out of change, and so without its floor */

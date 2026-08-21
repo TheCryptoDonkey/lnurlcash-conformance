@@ -90,9 +90,13 @@ const DEFAULTS = {
   // it back, the exposure LUD-25's h/h2 exists to close
   serverGeneratedSecrets: false,
   // non-compliant: round the total mint fee up to a whole sat, as a fee
-  // implementation that works in sats rather than msat does - the note
-  // mints short of the formula
+  // ceiling the mint fee to a whole sat, as dni's lnurl-mint does on
+  // purpose. Compliant: LUD-25 does not say whether the fee rounds, so
+  // the grader accepts anything between this and the msat-exact formula
   roundFeeToSat: false,
+  // beyond the band: withhold this much on top of the ceilinged fee, the
+  // one thing the minted-value check must still catch
+  extraFeeMsat: 0,
   // non-compliant: serve the preimage from /verify before settlement. On
   // a mint that value IS the bearer secret of the note the payment will
   // create, so this hands the note to anyone holding the payment hash
@@ -140,6 +144,7 @@ export const createMockMint = async (options = {}) => {
       Math.floor(((gross % 1e6) * opts.feePpm) / 1e6)
     let fee = opts.baseFeeMsat + proportional
     if (opts.roundFeeToSat) fee = Math.ceil(fee / 1000) * 1000
+    fee += opts.extraFeeMsat
     return Math.max(0, gross - fee)
   }
 
