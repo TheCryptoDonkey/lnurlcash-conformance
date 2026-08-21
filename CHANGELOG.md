@@ -4,6 +4,39 @@ Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may add or tighten checks that a previously-passing mint now fails; pin an
 exact version if you gate CI on the grade.
 
+## 0.2.0 - unreleased
+
+- New `vectors/derivation.json`: deterministic note secrets from a BIP39
+  seed, so that a wallet can be restored from words alone and two
+  implementations of the same wallet derive the same notes.
+  - `k1` is WALLET-generated in LUD-25 and the draft says nothing about how
+    one is produced, so a wallet is free to derive it instead of drawing it
+    at random. Nothing about this is observable on the wire: the mint still
+    only ever sees `sha256(k1)`.
+  - The scheme, in full, so this entry alone is enough to reimplement it.
+    `root = HMAC-SHA256(key = utf8("lnurlcash-note-v1"), msg = seed bytes)`,
+    then `k1 = HMAC-SHA256(key = root, msg = utf8(host + ":" + index))`.
+    Output is 32 bytes, lowercase hex, the same size as a payment preimage.
+    `host` is the mint host as the wallet stores it, lowercase, with the
+    port when there is one; `index` is decimal ASCII counting from 0. The
+    seed is the 64-byte BIP39 seed of a 12-word English mnemonic with no
+    passphrase.
+  - Cases cover the standard `abandon ... about` mnemonic at `mint.example`
+    for indices 0, 1, 2, 19 and 20 (19 and 20 straddle a 20-index gap
+    limit), a second mnemonic at the same host and index to show the seed
+    separates them, and a host carrying a port.
+  - Every case carries `seedHex` as well as the mnemonic, so an
+    implementation with no BIP39 library can still test the derivation
+    half on its own.
+  - `@scure/bip39` is a devDependency, used only to generate the file. The
+    published package gains no runtime dependency.
+
+- Self-check covers the new file: every `k1` recomputes from its own
+  `seedHex`, every mnemonic validates against the English wordlist and
+  produces the stated seed, and no two cases collide.
+
+- The mock mint is unchanged, defaults included.
+
 ## 0.1.2 - 2026-08-21
 
 - The minted-value check took a band instead of a single number, because

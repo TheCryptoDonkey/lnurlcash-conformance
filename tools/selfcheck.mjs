@@ -12,7 +12,10 @@ import {fileURLToPath} from 'node:url'
 import {bech32} from '@scure/base'
 import {sha256} from '@noble/hashes/sha2.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
+import {hmac} from '@noble/hashes/hmac.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
+import {mnemonicToSeedSync, validateMnemonic} from '@scure/bip39'
+import {wordlist} from '@scure/bip39/wordlists/english.js'
 
 const VECTORS = join(dirname(fileURLToPath(import.meta.url)), '..', 'vectors')
 const load = name => JSON.parse(readFileSync(join(VECTORS, name), 'utf8'))
@@ -119,6 +122,47 @@ check('the signature set covers both recovery-id orderings and refusal cases', (
   assert(sig.cases.some(c => c.valid && /trailing/.test(c.name)), 'no trailing case')
   assert(sig.cases.some(c => c.valid && /leading/.test(c.name)), 'no leading case')
   assert(sig.cases.filter(c => !c.valid).length >= 6, 'too few refusal cases')
+})
+
+// ---- derivation ----
+
+const derivation = load('derivation.json')
+
+check('every derived secret recomputes from its own seed', () => {
+  const root = seed => hmac(sha256, utf8ToBytes(derivation.scheme.rootKey), seed)
+  for (const c of derivation.cases) {
+    const k1 = bytesToHex(
+      hmac(sha256, root(hexToBytes(c.seedHex)), utf8ToBytes(`${c.host}:${c.index}`))
+    )
+    assert(k1 === c.k1, `${c.name}: k1 does not recompute`)
+    assert(c.noteId === noteId(c.k1), `${c.name}: noteId does not match k1`)
+    assert(/^[0-9a-f]{64}$/.test(c.k1), `${c.name}: k1 is not 32 bytes of lowercase hex`)
+  }
+})
+
+check('every derivation case states a real BIP39 mnemonic and its seed', () => {
+  for (const c of derivation.cases) {
+    assert(validateMnemonic(c.mnemonic, wordlist), `${c.name}: mnemonic fails BIP39 validation`)
+    assert(
+      bytesToHex(mnemonicToSeedSync(c.mnemonic)) === c.seedHex,
+      `${c.name}: seedHex is not the passphrase-less BIP39 seed of the mnemonic`
+    )
+  }
+})
+
+check('derived secrets are distinct across index, host and seed', () => {
+  const seen = new Map()
+  for (const c of derivation.cases) {
+    const prior = seen.get(c.k1)
+    assert(!prior, `${c.name}: collides with ${prior}`)
+    seen.set(c.k1, c.name)
+  }
+  const byHost = derivation.cases.filter(c => c.host === 'mint.example' && c.index === 0)
+  assert(byHost.length >= 2, 'no two seeds derive at the same host and index')
+  const ported = derivation.cases.find(c => /:\d+$/.test(c.host))
+  assert(ported, 'no case exercises a host carrying a port')
+  const indices = derivation.cases.map(c => c.index)
+  assert(indices.includes(19) && indices.includes(20), 'the gap-limit boundary is not covered')
 })
 
 // ---- bech32 ----

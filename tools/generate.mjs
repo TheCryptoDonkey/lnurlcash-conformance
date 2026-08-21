@@ -16,7 +16,9 @@ import {fileURLToPath} from 'node:url'
 import {bech32} from '@scure/base'
 import {sha256} from '@noble/hashes/sha2.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
+import {hmac} from '@noble/hashes/hmac.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
+import {mnemonicToSeedSync} from '@scure/bip39'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const OUT = join(HERE, '..', 'vectors')
@@ -217,6 +219,73 @@ const signature = {
       mintPubkey: 'ff'.repeat(33),
       valid: false
     })
+  ]
+}
+
+// ---- vectors: derivation (deterministic note secrets) --------------------
+
+// A note's k1 is WALLET-generated: LUD-25 says nothing about how, so a
+// wallet is free to derive it. Deriving it from a seed is what makes a
+// wallet restorable from words alone, and makes two implementations of the
+// same wallet agree on the same notes. The scheme is HMAC-SHA256 twice: a
+// domain-separated root over the seed bytes, then one secret per
+// "host:index". Nothing here goes on the wire; the mint only ever sees
+// sha256(k1), exactly as before.
+
+const DERIVE_ROOT_KEY = 'lnurlcash-note-v1'
+
+const deriveRoot = seed => hmac(sha256, utf8ToBytes(DERIVE_ROOT_KEY), seed)
+
+const deriveSecret = (root, host, index) =>
+  bytesToHex(hmac(sha256, root, utf8ToBytes(`${host}:${index}`)))
+
+// The two standard BIP39 test mnemonics, so a reader can sanity-check the
+// seed half of the vector against any BIP39 implementation before trusting
+// the derivation half.
+const MNEMONIC_A =
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+const MNEMONIC_B =
+  'legal winner thank year wave sausage worth useful legal winner thank yellow'
+
+const seedOf = mnemonic => mnemonicToSeedSync(mnemonic)
+
+const derivationCase = (name, mnemonic, host, index) => {
+  const seed = seedOf(mnemonic)
+  const k1 = deriveSecret(deriveRoot(seed), host, index)
+  return {
+    name,
+    mnemonic,
+    seedHex: bytesToHex(seed),
+    host,
+    index,
+    k1,
+    noteId: noteId(k1)
+  }
+}
+
+const derivation = {
+  version: VERSION,
+  spec: SPEC,
+  description:
+    'Deterministic note secrets from a BIP39 seed. k1 is WALLET-generated in LUD-25, so a wallet may derive it rather than draw it at random; deriving it is what lets a wallet be restored from words alone and lets two implementations of the same wallet agree on the same notes. Both steps are HMAC-SHA256: root = HMAC-SHA256(key = utf8("lnurlcash-note-v1"), msg = seed bytes), then k1 = HMAC-SHA256(key = root, msg = utf8(host + ":" + index)), 32 bytes, lowercase hex. host is the mint host exactly as the wallet stores it, lowercase, with the port when there is one; index is decimal ASCII counting from 0. seedHex is the 64-byte BIP39 seed with no passphrase, included so an implementation with no BIP39 library can still test the derivation. The mint sees only sha256(k1) as before, so nothing about this is observable on the wire.',
+  scheme: {
+    rootKey: DERIVE_ROOT_KEY,
+    rootMsg: 'seed bytes',
+    secretMsg: 'host:index'
+  },
+  cases: [
+    derivationCase('standard mnemonic, index 0', MNEMONIC_A, 'mint.example', 0),
+    derivationCase('standard mnemonic, index 1', MNEMONIC_A, 'mint.example', 1),
+    derivationCase('standard mnemonic, index 2', MNEMONIC_A, 'mint.example', 2),
+    derivationCase('standard mnemonic, index 19', MNEMONIC_A, 'mint.example', 19),
+    derivationCase(
+      'standard mnemonic, index 20 (one past a 20-index gap limit)',
+      MNEMONIC_A,
+      'mint.example',
+      20
+    ),
+    derivationCase('a second mnemonic, same host and index', MNEMONIC_B, 'mint.example', 0),
+    derivationCase('a host carrying a port', MNEMONIC_A, '127.0.0.1:8899', 0)
   ]
 }
 
@@ -1474,6 +1543,7 @@ const threatSuite = {
 
 const files = [
   write('signature.json', signature),
+  write('derivation.json', derivation),
   write('bech32.json', bech32Vectors),
   write('url-admission.json', urlAdmission),
   write('input-resolution.json', inputResolution),
