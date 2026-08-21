@@ -19,6 +19,7 @@
     "lifecycle.json",
     "threat-suite.json",
     "payment-request.json",
-    "settle-for-value.json"
+    "settle-for-value.json",
+    "retried-mutation.json"
   ]
 }

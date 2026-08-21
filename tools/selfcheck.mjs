@@ -257,6 +257,69 @@ check('every invalid bech32 input really is invalid', () => {
   }
 })
 
+// ---- the retried mutation ----
+
+const retried = load('retried-mutation.json')
+
+check('every retry case follows the declared identity', () => {
+  // Reimplemented rather than shared with the generator: identity is the
+  // whole content of this file, and a check that calls the function it is
+  // checking proves only that the function is deterministic.
+  const key = req =>
+    JSON.stringify([
+      [...req.k1].sort(),
+      req.h ?? null,
+      req.h2 ?? null,
+      req.amount ?? null
+    ])
+  for (const c of retried.cases) {
+    assert(
+      Object.keys(retried.outcomes).includes(c.outcome),
+      `${c.name}: unknown outcome ${c.outcome}`
+    )
+    for (const side of [c.recorded, c.retry]) {
+      assert(Array.isArray(side.k1) && side.k1.length > 0, `${c.name}: a side names no inputs`)
+      assert(/^[0-9a-f]{64}$/.test(side.h), `${c.name}: h is not a 32-byte hex id`)
+      if (side.h2 !== undefined) {
+        assert(/^[0-9a-f]{64}$/.test(side.h2), `${c.name}: h2 is not a 32-byte hex id`)
+      }
+    }
+    const expected = key(c.recorded) === key(c.retry) ? 'replay' : 'double-spend'
+    assert(expected === c.outcome, `${c.name}: identity gives ${expected}, not ${c.outcome}`)
+  }
+})
+
+check('the retry set pins every way a request can differ', () => {
+  const replays = retried.cases.filter(c => c.outcome === 'replay')
+  const refusals = retried.cases.filter(c => c.outcome === 'double-spend')
+  assert(replays.length >= 3, 'too few replay cases')
+  assert(refusals.length >= 5, 'too few double-spend cases')
+  assert(
+    replays.some(c => c.recorded.k1.length > 1 && c.recorded.k1.join() !== c.retry.k1.join()),
+    'nothing states that the inputs are a set rather than a sequence'
+  )
+  assert(
+    replays.some(c => c.recorded.h2 !== undefined) &&
+      replays.some(c => c.recorded.h2 === undefined),
+    'the replay cases do not cover both a split and a rotate'
+  )
+  for (const [what, differs] of [
+    ['h', c => c.recorded.h !== c.retry.h],
+    ['h2', c => (c.recorded.h2 ?? null) !== (c.retry.h2 ?? null)],
+    ['amount', c => (c.recorded.amount ?? null) !== (c.retry.amount ?? null)],
+    ['the input set', c => [...c.recorded.k1].sort().join() !== [...c.retry.k1].sort().join()]
+  ]) {
+    assert(
+      refusals.some(differs),
+      `no double-spend case turns on ${what} alone being different`
+    )
+  }
+  assert(
+    refusals.some(c => c.recorded.h2 !== undefined && c.retry.h2 === undefined),
+    'nothing states that an absent h2 is not the same as a present one'
+  )
+})
+
 // ---- payment requests ----
 //
 // The rules are reimplemented here rather than shared with the generator:

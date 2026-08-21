@@ -140,6 +140,14 @@ const DEFAULTS = {
   // the signer does, and it is the only way a note the mint issues on
   // demand can carry an old key's signature.
   signWithPreviousKey: false,
+  // What a retried mutation gets. A rotate, split or merge is a GET, and
+  // HTTP stacks retry a GET when the connection they used is dropped, so
+  // a SERVICE sees the byte-identical request twice. 'refuse' answers the
+  // second one as an already-spent input, which is what this mock has
+  // always done and remains the default. 'replay' answers it with the
+  // original success, which is what LUD-25 SHOULD say and what stops a
+  // holder discarding a note the SERVICE really did mint.
+  retriedMutation: 'refuse',
   // Liabilities. Off means 404, exactly as before; on serves GET /stats.
   stats: false,
   // What the node behind a stats-publishing mock claims to hold. Read
@@ -180,6 +188,20 @@ export const createMockMint = async (options = {}) => {
   // that funded it, so the preimage never needs to be persisted at all.
   const notes = new Map() // id -> {amountMsat, state: outstanding|pending|burned}
   const invoices = new Map() // paymentHash -> {amountMsat, preimage, settled}
+  // Provenance for retried mutations: which outputs a given set of inputs
+  // minted. Recorded, never inferred - matching on "a note exists at h"
+  // alone would let anyone holding a burned k1 and any outstanding note
+  // id pull a success out of the mint.
+  const swaps = new Map() // identity -> [{id, amountMsat}]
+
+  // What makes a request the same request: the same input k1 set, the
+  // same h, the same h2, the same amount. The inputs are a set rather
+  // than a sequence, because a merge naming the same notes in a different
+  // order is the same merge. Anything else naming a burned input is a
+  // double-spend attempt and is refused exactly as it was before, with
+  // the same reason string, so no oracle appears.
+  const swapIdentity = (k1s, h, h2, amountRaw) =>
+    [[...k1s].sort().join(','), h ?? '', h2 ?? '', amountRaw ?? ''].join('|')
 
   const sign = (noteIdHex, amountMsat, key = priv) => {
     if (!opts.signatures) return undefined
@@ -529,6 +551,29 @@ export const createMockMint = async (options = {}) => {
       if (pr && k1s.length > 1) return fail('pr must not be combined with multiple k1.')
       if (pr && amountRaw) return fail('pr must not be combined with amount.')
 
+      // The retry branch, before anything is refused for a burned input.
+      // This path is a READ: it burns nothing, mints nothing and moves no
+      // balance, so it does not go through finish() either. The signature
+      // is deterministic over (id, amount), so it is recomputed rather
+      // than stored.
+      if (opts.retriedMutation === 'replay' && !pr) {
+        const outputs = swaps.get(swapIdentity(k1s, h, h2, amountRaw))
+        if (outputs) {
+          const replay = {status: 'OK'}
+          const first = sign(outputs[0].id, outputs[0].amountMsat)
+          if (first) replay.sig = first
+          if (outputs[1]) {
+            const second = sign(outputs[1].id, outputs[1].amountMsat)
+            if (second) replay.sig2 = second
+          }
+          if (opts.serverGeneratedSecrets) {
+            replay.k1 = 'a'.repeat(64)
+            if (outputs[1]) replay.change = 'b'.repeat(64)
+          }
+          return send(replay)
+        }
+      }
+
       const found = []
       for (const k1 of k1s) {
         if (!/^[0-9a-f]{64}$/.test(k1)) return fail('Invalid or already spent k1.')
@@ -638,6 +683,10 @@ export const createMockMint = async (options = {}) => {
         for (const {note} of found) note.state = 'burned'
         const sig = mintNote(h, amount)
         const sig2 = mintNote(h2, change)
+        swaps.set(swapIdentity(k1s, h, h2, amountRaw), [
+          {id: h, amountMsat: amount},
+          {id: h2, amountMsat: change}
+        ])
         const body = {status: 'OK'}
         if (sig) body.sig = sig
         if (sig2) body.sig2 = sig2
@@ -655,6 +704,9 @@ export const createMockMint = async (options = {}) => {
       const refund = (k1s.length - 1) * opts.baseFeeMsat
       for (const {note} of found) note.state = 'burned'
       const sig = mintNote(h, total + refund)
+      swaps.set(swapIdentity(k1s, h, h2, amountRaw), [
+        {id: h, amountMsat: total + refund}
+      ])
       const body = {status: 'OK'}
       if (sig) body.sig = sig
       if (opts.serverGeneratedSecrets) body.k1 = 'a'.repeat(64)

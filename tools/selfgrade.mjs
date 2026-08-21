@@ -275,3 +275,53 @@ if (statusOf(unpublished, SIGNATURE_CHECK) !== 'fail') {
   die('a signature under a key the mint never published PASSED - the grader is blind')
 }
 console.log('ok   a signature under an unpublished key still caught')
+
+// ---- the retried mutation ----------------------------------------------
+//
+// A rotate, split or merge is a GET, and a dropped connection makes an
+// HTTP stack send the byte-identical request again. Refusing the second
+// one as an already-spent input is what the mock has always done, and it
+// is what makes a holder throw away a note the mint really did mint.
+
+const RETRY_CHECK = 'replays a retried mutation rather than refusing it (optional)'
+const REPLAYED_BURN = 'refuses a replayed burn'
+
+const refusing = await grade({baseFeeMsat: 1000, feePpm: 1000})
+if (statusOf(refusing, RETRY_CHECK) !== 'warn') {
+  die(`a mint refusing a retried mutation did not warn: ${statusOf(refusing, RETRY_CHECK)}`)
+}
+if (refusing.failed > 0) {
+  console.error('a mint refusing a retried mutation FAILED the grade - the behaviour is a SHOULD:')
+  for (const r of refusing.results.filter(r => r.status === 'fail')) {
+    console.error(`  FAIL ${r.name} - ${r.detail}`)
+  }
+  process.exit(1)
+}
+for (const shape of ['rotate', 'split']) {
+  if (!detailOf(refusing, RETRY_CHECK).includes(shape)) {
+    die(`the retry report does not mention a retried ${shape}: ${detailOf(refusing, RETRY_CHECK)}`)
+  }
+}
+if (statusOf(refusing, REPLAYED_BURN) !== 'pass') {
+  die(`the replayed-burn check stopped passing: ${detailOf(refusing, REPLAYED_BURN)}`)
+}
+console.log('ok   a mint refusing a retried mutation warns, names both shapes, and still passes')
+
+const replaying = await grade({retriedMutation: 'replay', baseFeeMsat: 1000, feePpm: 1000})
+if (replaying.failed > 0) {
+  console.error('a mint replaying a retried mutation FAILED grading:')
+  for (const r of replaying.results.filter(r => r.status === 'fail')) {
+    console.error(`  FAIL ${r.name} - ${r.detail}`)
+  }
+  process.exit(1)
+}
+if (statusOf(replaying, RETRY_CHECK) !== 'pass') {
+  die(`a mint replaying a retried mutation did not pass: ${detailOf(replaying, RETRY_CHECK)}`)
+}
+// The replay must not have become a way to spend a burned note twice: the
+// existing double-spend check sends a burned input with a FRESH output
+// hash, which is a different request and must still be refused.
+if (statusOf(replaying, REPLAYED_BURN) !== 'pass') {
+  die(`replaying retries opened a double-spend: ${detailOf(replaying, REPLAYED_BURN)}`)
+}
+console.log('ok   a mint replaying a retried mutation passes, and a real double-spend is still refused')

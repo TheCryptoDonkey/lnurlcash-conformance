@@ -854,6 +854,108 @@ export const gradeNote = async (noteUrl, report, options = {}) => {
     return `${va} + ${vb}, merged back to ${total}`
   })
 
+  // A rotate, split or merge is a GET, and HTTP stacks retry a GET when
+  // the connection they used is dropped: Go's net/http retries one that
+  // failed on a reused idle connection, the JDK's HttpClient retries
+  // idempotent methods with no switch to turn it off. The retry is byte
+  // identical. A SERVICE that answers it as an already-spent input tells
+  // the holder the mutation never happened, and a holder that believes it
+  // discards the only copy of a secret the SERVICE really did mint a note
+  // against. Nobody is told; the money is simply gone.
+  //
+  // Soft, because this is a SHOULD. A SERVICE that has not implemented it
+  // is reported as not having implemented it, not failed. What is NOT
+  // soft is damage: a retry that burns the output, or changes its value,
+  // fails outright whichever answer it gives.
+  await report.check('replays a retried mutation rather than refusing it (optional)', async () => {
+    const valueAt = async secret => {
+      const u = new URL(url)
+      u.searchParams.set('k1', secret)
+      const r = await get(u)
+      return r.status === 'ERROR' ? null : r.maxWithdrawable
+    }
+
+    // --- a rotate, retried ---
+    const fresh = bytesToHex(randomBytes(32))
+    const rotate = new URL(info.callback)
+    rotate.searchParams.append('k1', current)
+    rotate.searchParams.append('h', noteId(fresh))
+    const first = await get(rotate)
+    assert(first.status === 'OK', `the rotate itself was refused: ${first.reason}`)
+    current = fresh
+    currentSig = first.sig ?? null
+    const minted = await valueAt(fresh)
+    assert(minted !== null, 'the rotate reported OK but minted nothing')
+
+    const retried = await get(rotate)
+    const stillThere = await valueAt(fresh)
+    assert(
+      stillThere !== null,
+      'the retried rotate burned the note the first one minted - a retry must never destroy value'
+    )
+    assert(
+      stillThere === minted,
+      `the retried rotate changed the note's value: ${minted} -> ${stillThere}`
+    )
+
+    const problems = []
+    if (retried.status === 'ERROR') {
+      problems.push(
+        `a retried rotate is answered "${retried.reason}" while the note it minted is live and worth ${stillThere} msat`
+      )
+    } else if (first.sig && retried.sig !== first.sig) {
+      problems.push('a retried rotate replied OK but with a different sig than the original')
+    }
+
+    // --- a split, retried ---
+    // h2 and the change amount are part of what makes a request the same
+    // request, so a rotate on its own does not cover it.
+    const half = Math.floor(minted / 2)
+    if (half < 1 || (knownBaseFee !== null && minted - half < knownBaseFee + 1)) {
+      if (problems.length > 0) throw soft(problems.join('; ') + '; note too small to retry a split')
+      return 'a byte-identical rotate replays; note too small to retry a split'
+    }
+    const a = bytesToHex(randomBytes(32))
+    const b = bytesToHex(randomBytes(32))
+    const split = new URL(info.callback)
+    split.searchParams.append('k1', current)
+    split.searchParams.append('amount', String(half))
+    split.searchParams.append('h', noteId(a))
+    split.searchParams.append('h2', noteId(b))
+    const splitFirst = await get(split)
+    if (splitFirst.status !== 'OK') {
+      if (problems.length > 0) throw soft(problems.join('; ') + `; the split itself was refused: ${splitFirst.reason}`)
+      throw soft(`a byte-identical rotate replays; the split itself was refused: ${splitFirst.reason}`)
+    }
+    const [va, vb] = [await valueAt(a), await valueAt(b)]
+    const splitRetried = await get(split)
+    const [va2, vb2] = [await valueAt(a), await valueAt(b)]
+    assert(
+      va2 === va && vb2 === vb,
+      `the retried split changed its outputs: ${va}/${vb} -> ${va2}/${vb2}`
+    )
+    if (splitRetried.status === 'ERROR') {
+      problems.push(`a retried split is answered "${splitRetried.reason}" while both its outputs are live`)
+    } else if (splitFirst.sig2 && splitRetried.sig2 !== splitFirst.sig2) {
+      problems.push('a retried split replied OK but with a different sig2 than the original')
+    }
+
+    // put the two halves back together, so the runner ends holding one note
+    const merged = bytesToHex(randomBytes(32))
+    const mergeBack = new URL(info.callback)
+    mergeBack.searchParams.append('k1', a)
+    mergeBack.searchParams.append('k1', b)
+    mergeBack.searchParams.append('h', noteId(merged))
+    const mergeBody = await get(mergeBack)
+    if (mergeBody.status === 'OK') {
+      current = merged
+      currentSig = mergeBody.sig ?? null
+    }
+
+    if (problems.length > 0) throw soft(problems.join('; '))
+    return 'a byte-identical rotate and split both replay the original success'
+  })
+
   await report.check('refuses a replayed burn', async () => {
     const cb = new URL(info.callback)
     cb.searchParams.append('k1', k1)
