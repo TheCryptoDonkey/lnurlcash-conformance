@@ -127,8 +127,14 @@ experimental mint address.
 
 One check needs a real payment, which the runner cannot make on its own.
 Given a freshly minted, never-rotated note and what its mint invoice was
-paid at, it compares the note's value against the fee formula - msat-exact,
-so a fee implementation that quietly rounds up to whole sats is caught:
+paid at, it compares the note's value against the advertised fee:
+
+LUD-25 says nothing about whether that fee rounds, and the two live
+implementations differ. dni's lnurl-mint ceilings it to a whole sat on
+purpose, so the mint is never short a sat; moneyer withholds the
+msat-exact amount. Both pass. The check grades the range between them and
+names which it saw, and a msat outside it either way fails - a mint taking
+more than the ceilinged fee, or crediting more than it advertised.
 
 ```bash
 npx lnurlcash-conform mint@example.com --note='lnurlw://...?k1=...' --paid=500000
