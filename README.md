@@ -57,6 +57,8 @@ for (const c of cases) {
 | `responses.json` | classifying every reply, including the ambiguous ones |
 | `withdraw-info.json` | the informational GET, and what makes a response invalid |
 | `pay-request.json` | minting, LUD-11 disposable, LUD-21 verify |
+| `payment-request.json` | `lnurlcashreq1`: one holder asking another for value |
+| `settle-for-value.json` | the decision table a server works through to take a note as payment |
 | `lifecycle.json` | behavioural requirements, as scenarios to drive |
 | `threat-suite.json` | the transport/exposure scorecard — candidate spec options against fixed attacks (non-normative) |
 
