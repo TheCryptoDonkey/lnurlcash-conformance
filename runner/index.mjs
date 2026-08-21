@@ -5,6 +5,7 @@
 // with the thing it grades would agree with that implementation's mistakes,
 // which is the one thing it must never do.
 
+import {bech32} from '@scure/base'
 import {sha256} from '@noble/hashes/sha2.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
@@ -68,6 +69,24 @@ const isAllowedUrl = value => {
   return (
     ['127.0.0.1', '0.0.0.0', 'localhost'].includes(host) || host.endsWith('.onion')
   )
+}
+
+// A 33-byte compressed secp256k1 point in hex, which is what every pubkey
+// on this wire is.
+const isCompressedPubkey = value =>
+  typeof value === 'string' && /^0[23][0-9a-f]{64}$/i.test(value)
+
+// NIP-19 npub: bech32 with the npub hrp over exactly 32 bytes. Decoded
+// rather than pattern-matched, because a string that merely starts with
+// "npub1" is not a key anyone can send to.
+const isNpub = value => {
+  if (typeof value !== 'string' || !value.toLowerCase().startsWith('npub1')) return false
+  try {
+    const {prefix, words} = bech32.decode(value.toLowerCase(), 200)
+    return prefix === 'npub' && bech32.fromWords(words).length === 32
+  } catch {
+    return false
+  }
 }
 
 const get = async (url, timeoutMs = 15_000) => {
@@ -182,6 +201,7 @@ export const resolveMint = input => {
 
 export const gradeMint = async (payUrl, report) => {
   let pay
+  let mintAddress
   await report.check('payRequest resolves and is well-formed', async () => {
     pay = await get(payUrl)
     assert(pay.tag === 'payRequest', `tag was ${JSON.stringify(pay.tag)}`)
@@ -300,9 +320,139 @@ export const gradeMint = async (payUrl, report) => {
     if (body.status === 'ERROR') throw soft(`not published: ${body.reason}`)
     assert(body.tag === 'withdrawRequest', 'wrong tag')
     assert(typeof body.payLink === 'string', 'no payLink back to the payRequest')
-    return body.mintPubkey ? `node ${body.mintPubkey.slice(0, 16)}...` : 'published'
+    mintAddress = body
+
+    // Mint info: who runs this, how to reach them, the terms, the message
+    // of the day, the structured fee, and the keys this mint has signed
+    // under before. Every one is optional and none is in any LUD, so
+    // absence is never a failure - but a field that IS published and is
+    // the wrong shape is worth saying out loud, because a wallet will try
+    // to render it. Malformed means a warning, not a fail.
+    const problems = []
+    for (const key of ['name', 'description', 'tosUrl', 'motd', 'version']) {
+      const value = body[key]
+      if (value === undefined) continue
+      if (typeof value !== 'string' || value === '') problems.push(`${key} is not a non-empty string`)
+    }
+    if (typeof body.tosUrl === 'string' && body.tosUrl && !isAllowedUrl(body.tosUrl)) {
+      problems.push('tosUrl is not a fetchable URL')
+    }
+    if (body.contact !== undefined) {
+      if (typeof body.contact !== 'object' || body.contact === null || Array.isArray(body.contact)) {
+        problems.push('contact is not an object')
+      } else {
+        if (body.contact.nostr !== undefined && !isNpub(body.contact.nostr)) {
+          problems.push('contact.nostr does not decode as an npub')
+        }
+        if (
+          body.contact.email !== undefined &&
+          !(typeof body.contact.email === 'string' && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(body.contact.email))
+        ) {
+          problems.push('contact.email is not an address')
+        }
+        if (body.contact.url !== undefined && !isAllowedUrl(body.contact.url)) {
+          problems.push('contact.url is not a fetchable URL')
+        }
+      }
+    }
+    if (body.fees !== undefined) {
+      const fees = body.fees
+      if (
+        typeof fees !== 'object' ||
+        fees === null ||
+        !Number.isFinite(fees.baseFeeMsat) ||
+        !Number.isFinite(fees.feePpm)
+      ) {
+        problems.push('fees is not {baseFeeMsat, feePpm} in numbers')
+      } else if (fees.baseFeeMsat < 0 || fees.feePpm < 0) {
+        problems.push('fees are negative')
+      }
+    }
+    if (body.previousPubkeys !== undefined) {
+      if (!Array.isArray(body.previousPubkeys)) {
+        problems.push('previousPubkeys is not an array')
+      } else if (!body.previousPubkeys.every(isCompressedPubkey)) {
+        problems.push('previousPubkeys holds something that is not a 33-byte compressed pubkey in hex')
+      } else if (body.mintPubkey && body.previousPubkeys.includes(body.mintPubkey)) {
+        problems.push('previousPubkeys lists the current mintPubkey, which says nothing')
+      }
+    }
+    // The node capacity is msat like every other amount here, and the wire
+    // name carries no suffix. A mint spelling it nodeCapacityMsat reads as
+    // undefined to anything mapping the documented name.
+    if (body.nodeCapacityMsat !== undefined && body.nodeCapacity === undefined) {
+      problems.push('node capacity is published as nodeCapacityMsat; the wire name is nodeCapacity')
+    }
+    if (problems.length > 0) throw soft(problems.join('; '))
+
+    const published = [
+      'name',
+      'description',
+      'contact',
+      'tosUrl',
+      'motd',
+      'version',
+      'fees',
+      'previousPubkeys'
+    ].filter(key => body[key] !== undefined)
+    const base = body.mintPubkey ? `node ${body.mintPubkey.slice(0, 16)}...` : 'published'
+    return published.length > 0 ? `${base}, info: ${published.join(', ')}` : base
   })
 
+  // Liabilities. Outside LUD-25 entirely, and a mint that publishes
+  // nothing is not being graded down for it. Notes here are not blinded,
+  // so a mint that wants to can state what it owes exactly, and a holder
+  // can compare that against what the node behind it holds.
+  await report.check('publishes liabilities (optional)', async () => {
+    const stats = new URL(payUrl)
+    stats.pathname = '/stats'
+    stats.search = ''
+    let body
+    try {
+      body = await get(stats)
+    } catch {
+      throw soft('no /stats endpoint - optional, and outside LUD-25')
+    }
+    if (body?.status === 'ERROR') throw soft(`not published: ${body.reason}`)
+    // /stats is a common enough path that something unrelated may answer
+    // on it. Nothing here treats that as a broken liabilities endpoint.
+    if (typeof body !== 'object' || body === null || body.outstandingMsat === undefined) {
+      throw soft('/stats answered without an outstandingMsat - not a liabilities endpoint')
+    }
+    assert(
+      Number.isFinite(body.outstandingMsat) && body.outstandingMsat >= 0,
+      `outstandingMsat was ${JSON.stringify(body.outstandingMsat)}`
+    )
+    if (body.coverage !== undefined) {
+      assert(Number.isFinite(body.coverage), `coverage was ${JSON.stringify(body.coverage)}`)
+    }
+    if (body.localBalanceMsat !== undefined) {
+      assert(
+        Number.isFinite(body.localBalanceMsat),
+        `localBalanceMsat was ${JSON.stringify(body.localBalanceMsat)}`
+      )
+    }
+    const detail =
+      `owes ${body.outstandingMsat} msat` +
+      (Number.isFinite(body.localBalanceMsat) ? `, node holds ${body.localBalanceMsat}` : '') +
+      (Number.isFinite(body.coverage) ? `, coverage ${body.coverage}` : '')
+    // Under-coverage is a warning and never a failure. Whether a mint is
+    // fully backed is the operator's to disclose, and a mint that
+    // publishes an uncomfortable number is behaving better than one that
+    // publishes nothing at all.
+    if (
+      Number.isFinite(body.localBalanceMsat) &&
+      body.localBalanceMsat < body.outstandingMsat
+    ) {
+      throw soft(`${detail} - the node holds less than the mint owes`)
+    }
+    return detail
+  })
+
+  // The payRequest, with the mint address the checks above fetched hung
+  // off it: a caller grading a note afterwards needs previousPubkeys from
+  // it, and fetching the same endpoint twice to get them would be silly.
+  if (pay && mintAddress) pay.mintAddress = mintAddress
   return pay
 }
 
@@ -364,8 +514,16 @@ export const gradeMintedValue = async (noteUrl, report, {mintFee = null, paidMsa
 // split/merge conservation checks are exact when the fee is known and
 // bounded when it is not. LUD-25's fee algebra: base_fee_msat comes out of
 // every split's change, and a merge of n notes refunds (n - 1) base fees.
+//
+// options.previousPubkeys: keys this mint has signed under before, from
+// the discovery endpoint. A note issued before a signing-key rotation
+// still verifies against one of them, and grading that as a bad signature
+// would punish a mint for rotating properly.
 export const gradeNote = async (noteUrl, report, options = {}) => {
   const knownBaseFee = 'mintFee' in options ? (options.mintFee?.baseFeeMsat ?? 0) : null
+  const previousPubkeys = Array.isArray(options.previousPubkeys)
+    ? options.previousPubkeys.filter(isCompressedPubkey)
+    : []
   const url = new URL(fromLud17(noteUrl))
   const k1 = url.searchParams.get('k1')?.toLowerCase()
   assert(k1 && /^[0-9a-f]{64}$/.test(k1), 'that note carries no 32-byte hex k1')
@@ -475,11 +633,21 @@ export const gradeNote = async (noteUrl, report, options = {}) => {
   await report.check('signs the notes it issues (optional)', async () => {
     if (!info.mintPubkey) throw soft('no mintPubkey advertised - offline verification unavailable')
     if (!currentSig) throw soft('mintPubkey advertised but no sig returned')
-    assert(
-      verifySignature(current, info.maxWithdrawable, currentSig, info.mintPubkey),
-      'the signature does not verify against the advertised mintPubkey and amount'
+    // A mint that has rotated its signing key publishes the old ones as
+    // previousPubkeys, so notes it issued before the rotation still
+    // verify. Any key it currently stands behind is an acceptable signer.
+    const signedBy = [info.mintPubkey, ...previousPubkeys].find(key =>
+      verifySignature(current, info.maxWithdrawable, currentSig, key)
     )
-    return 'verified offline'
+    assert(
+      signedBy,
+      previousPubkeys.length > 0
+        ? 'the signature verifies against neither the advertised mintPubkey nor any published previous key'
+        : 'the signature does not verify against the advertised mintPubkey and amount'
+    )
+    return signedBy === info.mintPubkey
+      ? 'verified offline'
+      : `verified offline against a previous signing key (${signedBy.slice(0, 16)}...)`
   })
 
   // The still-alive probe the three adversarial checks below share: a

@@ -163,5 +163,71 @@
       "mintPubkey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "valid": false
     }
-  ]
+  ],
+  "rotation": {
+    "description": "A note signed under a key the SERVICE has since rotated away from. Valid means the signature recovers a key that appears anywhere in mintPubkeys - the current key first, then any previously published one. The same signature against a list that no longer names the old key is invalid, which is what makes the published list load-bearing rather than decorative: a SERVICE cannot retire a key and still have its old notes verify, and an attacker cannot have a key accepted by asserting it.",
+    "currentPubkey": "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa",
+    "previousPubkey": "023c72addb4fdf09af94f0c94d7fe92a386a7e70cf8a1d85916386bb2535c7b1b1",
+    "cases": [
+      {
+        "name": "valid: signed under a previous key, both keys published",
+        "k1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "noteId": "e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e",
+        "amountMsat": 21000,
+        "message": "LNURLcash:21000:e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e",
+        "digest": "81d0a23ebaa22f6f45546e4d816c47bb5de7bb969e98f952a73141d528168011",
+        "signature": "81d5f426a7b673bb1932cdd06f6d037f8730df2d474bf19b60b791f08b12167068b241e88260612a006736e285b12e6e9908a829aae33fa1c7f4e4c92644b7ec00",
+        "mintPubkeys": [
+          "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa",
+          "023c72addb4fdf09af94f0c94d7fe92a386a7e70cf8a1d85916386bb2535c7b1b1"
+        ],
+        "valid": true,
+        "note": "the note was issued before the rotation; grading it as forged would punish a SERVICE for rotating properly"
+      },
+      {
+        "name": "invalid: the same signature with only the current key published",
+        "k1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "noteId": "e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e",
+        "amountMsat": 21000,
+        "message": "LNURLcash:21000:e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e",
+        "digest": "81d0a23ebaa22f6f45546e4d816c47bb5de7bb969e98f952a73141d528168011",
+        "signature": "81d5f426a7b673bb1932cdd06f6d037f8730df2d474bf19b60b791f08b12167068b241e88260612a006736e285b12e6e9908a829aae33fa1c7f4e4c92644b7ec00",
+        "mintPubkeys": [
+          "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa"
+        ],
+        "valid": false,
+        "note": "byte for byte the signature above - only the published list changed, and that alone decides it"
+      },
+      {
+        "name": "valid: signed under the current key while a previous one is published",
+        "k1": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "noteId": "4ca14526b2751b640d549ce7caf8ac39438592211a0ec370064d57666a682ad6",
+        "amountMsat": 21000,
+        "message": "LNURLcash:21000:4ca14526b2751b640d549ce7caf8ac39438592211a0ec370064d57666a682ad6",
+        "digest": "67c0f1f10119dc19388379f7764b5630d338760f1b2405b74128e00aff0550e5",
+        "signature": "262770a4dff6d61985750f385d5d200c0dcc4add9d591de8c1102166667386410d98dfe81165a1a2ec9a27185b0e397639fddde25bb3fe25394457834a87cf8400",
+        "mintPubkeys": [
+          "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa",
+          "023c72addb4fdf09af94f0c94d7fe92a386a7e70cf8a1d85916386bb2535c7b1b1"
+        ],
+        "valid": true,
+        "note": "a longer list must not stop the current key from verifying"
+      },
+      {
+        "name": "invalid: signed under a key that was never published",
+        "k1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "noteId": "e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e",
+        "amountMsat": 21000,
+        "message": "LNURLcash:21000:e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e",
+        "digest": "81d0a23ebaa22f6f45546e4d816c47bb5de7bb969e98f952a73141d528168011",
+        "signature": "02d050395a2eb48fe2fa3d68d2bf552ffdbcef7c97577fe436a41f044d72fe282cc7e6b93ba41620081195b82804a1eb83b03475bf45eeb250b6277e4d0dbbdb01",
+        "mintPubkeys": [
+          "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa",
+          "023c72addb4fdf09af94f0c94d7fe92a386a7e70cf8a1d85916386bb2535c7b1b1"
+        ],
+        "valid": false,
+        "note": "accepting a list must not become accepting anything"
+      }
+    ]
+  }
 }

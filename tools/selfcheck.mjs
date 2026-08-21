@@ -124,6 +124,65 @@ check('the signature set covers both recovery-id orderings and refusal cases', (
   assert(sig.cases.filter(c => !c.valid).length >= 6, 'too few refusal cases')
 })
 
+check('every rotation case verifies against exactly the keys it publishes', () => {
+  const verify = (k1, amountMsat, sigHex, pubkeys) => {
+    let bytes
+    try {
+      bytes = hexToBytes(sigHex)
+    } catch {
+      return false
+    }
+    if (bytes.length !== 65) return false
+    const digest = digestOf(k1, amountMsat)
+    const leading = new Uint8Array([bytes[64], ...bytes.subarray(0, 64)])
+    for (const candidate of [leading, bytes]) {
+      try {
+        const recovered = bytesToHex(
+          secp256k1.recoverPublicKey(candidate, digest, {prehash: false})
+        )
+        if (pubkeys.some(p => p.toLowerCase() === recovered)) return true
+      } catch {
+        // wrong ordering
+      }
+    }
+    return false
+  }
+  const rotation = sig.rotation
+  assert(rotation && Array.isArray(rotation.cases), 'no rotation block')
+  for (const c of rotation.cases) {
+    assert(Array.isArray(c.mintPubkeys) && c.mintPubkeys.length > 0, `${c.name}: no mintPubkeys`)
+    assert(c.message === `LNURLcash:${c.amountMsat}:${noteId(c.k1)}`, `${c.name}: message does not match`)
+    assert(c.noteId === noteId(c.k1), `${c.name}: noteId does not match`)
+    assert(
+      c.digest === bytesToHex(digestOf(c.k1, c.amountMsat)),
+      `${c.name}: digest does not match`
+    )
+    assert(
+      verify(c.k1, c.amountMsat, c.signature, c.mintPubkeys) === c.valid,
+      `${c.name}: expected valid=${c.valid}`
+    )
+  }
+})
+
+check('the rotation pair turns on the published list and nothing else', () => {
+  const cases = sig.rotation.cases
+  const good = cases.find(c => c.valid && c.mintPubkeys.length > 1 && c.k1 === cases[0].k1)
+  const bad = cases.find(c => !c.valid && c.signature === good.signature)
+  assert(good && bad, 'no pair sharing a signature across two published lists')
+  assert(
+    bad.mintPubkeys.length < good.mintPubkeys.length,
+    'the invalid case does not publish a shorter list'
+  )
+  assert(
+    !bad.mintPubkeys.includes(sig.rotation.previousPubkey),
+    'the invalid case still publishes the previous key'
+  )
+  assert(
+    !sig.rotation.cases.some(c => c.mintPubkeys.includes(sig.rotation.currentPubkey) === false),
+    'every rotation case must publish the current key'
+  )
+})
+
 // ---- derivation ----
 
 const derivation = load('derivation.json')

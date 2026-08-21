@@ -45,6 +45,12 @@ const OTHER_PRIV = hexToBytes(
   '2222222222222222222222222222222222222222222222222222222222222222'
 )
 const OTHER_PUB = bytesToHex(secp256k1.getPublicKey(OTHER_PRIV, true))
+// the key this mint signed under before it rotated. Still published, so
+// notes it issued before the rotation still verify.
+const PREV_PRIV = hexToBytes(
+  '3333333333333333333333333333333333333333333333333333333333333333'
+)
+const PREV_PUB = bytesToHex(secp256k1.getPublicKey(PREV_PRIV, true))
 
 const K1_A = 'a'.repeat(64)
 const K1_B = 'b'.repeat(64)
@@ -219,7 +225,69 @@ const signature = {
       mintPubkey: 'ff'.repeat(33),
       valid: false
     })
-  ]
+  ],
+  // Signing-key rotation. A SERVICE that rotates its signing key keeps
+  // publishing the old public keys, so the notes it already issued do not
+  // all stop verifying at once. These cases carry a LIST of acceptable
+  // keys rather than the single mintPubkey the cases above carry, and
+  // live in their own block for exactly that reason: a verifier that
+  // knows nothing about rotation reads `cases` and is unaffected.
+  rotation: {
+    description:
+      'A note signed under a key the SERVICE has since rotated away from. Valid means the signature recovers a key that appears anywhere in mintPubkeys - the current key first, then any previously published one. The same signature against a list that no longer names the old key is invalid, which is what makes the published list load-bearing rather than decorative: a SERVICE cannot retire a key and still have its old notes verify, and an attacker cannot have a key accepted by asserting it.',
+    currentPubkey: MINT_PUB,
+    previousPubkey: PREV_PUB,
+    cases: [
+      {
+        name: 'valid: signed under a previous key, both keys published',
+        k1: K1_A,
+        noteId: noteId(K1_A),
+        amountMsat: 21000,
+        message: sigMessage(K1_A, 21000),
+        digest: bytesToHex(sigDigest(K1_A, 21000)),
+        signature: bytesToHex(signTrailing(PREV_PRIV, K1_A, 21000)),
+        mintPubkeys: [MINT_PUB, PREV_PUB],
+        valid: true,
+        note: 'the note was issued before the rotation; grading it as forged would punish a SERVICE for rotating properly'
+      },
+      {
+        name: 'invalid: the same signature with only the current key published',
+        k1: K1_A,
+        noteId: noteId(K1_A),
+        amountMsat: 21000,
+        message: sigMessage(K1_A, 21000),
+        digest: bytesToHex(sigDigest(K1_A, 21000)),
+        signature: bytesToHex(signTrailing(PREV_PRIV, K1_A, 21000)),
+        mintPubkeys: [MINT_PUB],
+        valid: false,
+        note: 'byte for byte the signature above - only the published list changed, and that alone decides it'
+      },
+      {
+        name: 'valid: signed under the current key while a previous one is published',
+        k1: K1_B,
+        noteId: noteId(K1_B),
+        amountMsat: 21000,
+        message: sigMessage(K1_B, 21000),
+        digest: bytesToHex(sigDigest(K1_B, 21000)),
+        signature: bytesToHex(signTrailing(MINT_PRIV, K1_B, 21000)),
+        mintPubkeys: [MINT_PUB, PREV_PUB],
+        valid: true,
+        note: 'a longer list must not stop the current key from verifying'
+      },
+      {
+        name: 'invalid: signed under a key that was never published',
+        k1: K1_A,
+        noteId: noteId(K1_A),
+        amountMsat: 21000,
+        message: sigMessage(K1_A, 21000),
+        digest: bytesToHex(sigDigest(K1_A, 21000)),
+        signature: bytesToHex(signTrailing(OTHER_PRIV, K1_A, 21000)),
+        mintPubkeys: [MINT_PUB, PREV_PUB],
+        valid: false,
+        note: 'accepting a list must not become accepting anything'
+      }
+    ]
+  }
 }
 
 // ---- vectors: derivation (deterministic note secrets) --------------------

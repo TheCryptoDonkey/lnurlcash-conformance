@@ -35,7 +35,80 @@ exact version if you gate CI on the grade.
   `seedHex`, every mnemonic validates against the English wordlist and
   produces the stated seed, and no two cases collide.
 
-- The mock mint is unchanged, defaults included.
+- Three optional extensions a mint may publish, none of them in LUD-25,
+  all of them absent or off unless asked for. A mock started with no
+  options answers byte for byte what it answered before, and a mint
+  publishing none of them is not graded down.
+
+  - **Mint info** on the experimental discovery endpoint. Mock knobs
+    `name`, `description`, `contact` (`{nostr, email, url}`), `tosUrl`,
+    `motd`, `version` and `previousPubkeys`, appended after the existing
+    fields so nothing above them moves. `fees: {baseFeeMsat, feePpm}` is
+    emitted whenever a fee is configured: the structured twin of the fee
+    line in the payRequest metadata, which stays exactly as it was.
+    `nodeCapacity` is emitted as before, under that name.
+
+  - **Liabilities**. Mock knob `stats: true` (default `false`, and when
+    off `/stats` falls through to the same 404 every unknown path gets)
+    serving `GET /stats` as `{at, outstandingMsat, outstandingNotes,
+    pendingMsat, pendingMelts, oldestPendingMeltAgeSecs, localBalanceMsat?,
+    coverage?, reconciledAt}`. Notes here are not blinded, so a mint can
+    state what it owes exactly. A note mid-melt counts under `pending`
+    rather than `outstanding`: its value is committed, not free, and it
+    comes back if the payment fails. `coverage` is
+    `localBalanceMsat / outstandingMsat` to four decimal places, omitted
+    when nothing is owed. Knob `localBalanceMsat` sets what the node
+    claims to hold, so a mock can be told to look under-covered.
+
+  - **Signing-key rotation**. Mock knobs `previousPrivateKey` (an old key
+    the mock still holds; its public half joins `previousPubkeys` on its
+    own) and `previousPubkeys`. `state.creditNote(k1, amount,
+    {previousKey: true})` signs one note under the old key and leaves the
+    rest under the new, and `/_test/credit?...&key=previous` does the
+    same out of process. `signWithPreviousKey` issues every note under the
+    old key while still advertising the new one: the mid-rotation state a
+    mint passes through when the advertisement moves before the signer.
+
+- Grader, all soft, all read-only:
+
+  - `publishes a mint address (experimental, optional)` keeps its name and
+    its existing assertions, and now checks the shape of the new fields
+    when they are present: the string fields non-empty, `tosUrl` and
+    `contact.url` fetchable, `contact.nostr` decoded as an npub rather
+    than pattern-matched, `contact.email` address-shaped, `fees` numeric
+    and not negative, `previousPubkeys` an array of 33-byte compressed
+    pubkeys in hex that does not merely restate the current one. A
+    malformed field is a warning, never a failure, and absence is neither.
+    The pass line names which fields it saw. A mint publishing its node
+    capacity as `nodeCapacityMsat` warns as well: the wire name carries no
+    suffix, and anything mapping the documented name reads undefined.
+
+  - New `publishes liabilities (optional)`. No `/stats`, or a `/stats`
+    that answers with something other than a liabilities body, is a
+    warning and nothing more. When it does answer, `outstandingMsat` must
+    be a number at or above zero and `coverage` must be numeric when
+    present. A node holding less than the mint owes warns rather than
+    fails: whether a mint is fully backed is the operator's to disclose,
+    and one that publishes an uncomfortable number is behaving better than
+    one that publishes nothing.
+
+  - `signs the notes it issues (optional)` accepts a signature recovering
+    any key the mint publishes, the current `mintPubkey` first and then
+    anything in `previousPubkeys`, and says which it was. Grading a note
+    issued before a rotation as forged would punish a mint for rotating
+    properly. `gradeNote` takes the list as `options.previousPubkeys`; the
+    CLI carries it across from the discovery endpoint on its own, which
+    `gradeMint` now hangs off the payRequest it returns as `mintAddress`.
+
+- `signature.json` gains a `rotation` block: a note signed under a
+  previous key with both keys published (valid), the same signature byte
+  for byte with only the current key published (invalid), a
+  current-key signature alongside a published previous one (valid), and a
+  signature under a key that was never published (invalid). The cases
+  carry `mintPubkeys` as a list rather than the single `mintPubkey` the
+  existing cases carry, and live in their own block for that reason: a
+  verifier that knows nothing about rotation reads `cases` and is
+  completely unaffected by this release.
 
 ## 0.1.2 - 2026-08-21
 
