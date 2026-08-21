@@ -6,6 +6,28 @@ exact version if you gate CI on the grade.
 
 ## Unreleased
 
+- Two refusals LUD-25 spells out were never graded. Both are reachable
+  against a live mint, and both were being stepped around rather than
+  tested.
+  - `refuses a split with no h2`: a split names two outputs, so a mint
+    given only `h` either refuses or invents the change note's secret
+    itself. The second is the exact prior-holder exposure wallet-generated
+    secrets exist to close, and it was ungraded.
+  - `refuses a split whose change cannot cover the base fee`: the grader
+    already knew the advertised base fee, and skipped (`note too small to
+    split past the advertised base fee`) rather than deliberately leaving
+    change one msat short of it. It now does that on purpose and expects
+    `insufficient value`. Warns when no fee is advertised, since the rule
+    cannot bite.
+  - Both confirm the note survives the refusal, and both are self-verified:
+    the mock gains `acceptsMissingH2` and `splitIgnoresBaseFee`, and
+    selfgrade asserts each is caught by name rather than by failure count.
+- The grader never melts, so `pending`, restore-on-failure and a melt's own
+  LUD-21 `verify` cannot be graded against a live service - melting real
+  sats is not something a grader may do on its own initiative. The mock
+  covers all three for client-side suites. Said so in the README, which
+  previously left the gap to be inferred.
+
 - `withdrawLink` has two legal spellings in the wild. LUD-25 calls it "a
   raw, non bech32-encoded URL as described in LUD-17", and LUD-17 describes
   both the `lnurlw://` scheme and the plain `https://` URL it stands for.

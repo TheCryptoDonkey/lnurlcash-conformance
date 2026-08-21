@@ -452,7 +452,10 @@ export const createMockMint = async (options = {}) => {
       }
 
       if (!h) return fail('missing h')
-      if (amountRaw !== null && !h2) return fail('missing h2')
+      // opts.acceptsMissingH2: the misbehaviour where a SERVICE fills in the
+      // change note's secret itself rather than refusing. Whoever runs the
+      // mint is then a prior holder of half the split.
+      if (amountRaw !== null && !h2 && !opts.acceptsMissingH2) return fail('missing h2')
       if (!/^[0-9a-f]{64}$/.test(h)) return fail('missing h')
       if (h2 && !/^[0-9a-f]{64}$/.test(h2)) return fail('missing h2')
       // One id cannot carry two notes, and an id already in use - as a note
@@ -484,8 +487,16 @@ export const createMockMint = async (options = {}) => {
         // change that cannot cover the fee, or would land at exactly
         // nothing, refuses with the spec's own reason.
         const changeBeforeFee = total - amount
-        if (changeBeforeFee < opts.baseFeeMsat) return fail('insufficient value')
-        const change = changeBeforeFee - opts.baseFeeMsat
+        // opts.splitIgnoresBaseFee: the misbehaviour where a SERVICE never
+        // learned the split-fee rule at all - no fee out of change, and so
+        // no floor to refuse against either.
+        let change
+        if (opts.splitIgnoresBaseFee) {
+          change = changeBeforeFee
+        } else {
+          if (changeBeforeFee < opts.baseFeeMsat) return fail('insufficient value')
+          change = changeBeforeFee - opts.baseFeeMsat
+        }
         if (change < 1) return fail('insufficient value')
         for (const {note} of found) note.state = 'burned'
         const sig = mintNote(h, amount)
