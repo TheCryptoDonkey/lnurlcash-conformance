@@ -337,12 +337,20 @@ check('every mint-to-hash case follows the declared rule', () => {
       Object.keys(mintToHash.outcomes).includes(c.outcome),
       `${c.name}: unknown outcome ${c.outcome}`
     )
+    // hex is case-insensitive, so well-formedness is judged on the bytes
+    // and the SERVICE compares the lowercase form
+    const wellFormed = c.h !== null && /^[0-9a-f]{64}$/i.test(c.h)
+    const compared = wellFormed ? c.h.toLowerCase() : null
+    assert(
+      c.comparedAs === compared,
+      `${c.name}: comparedAs is ${JSON.stringify(c.comparedAs)}, not ${JSON.stringify(compared)}`
+    )
     const expected =
       c.h === null
         ? 'unbound'
-        : !/^[0-9a-f]{64}$/.test(c.h)
+        : !wellFormed
           ? 'malformed-h'
-          : inUse.includes(c.h)
+          : inUse.includes(compared)
             ? 'collision'
             : 'bound'
     assert(expected === c.outcome, `${c.name}: the rule gives ${expected}, not ${c.outcome}`)
@@ -358,7 +366,7 @@ check('every mint-to-hash case follows the declared rule', () => {
       assert(c.reason === reason, `${c.name}: reason was ${JSON.stringify(c.reason)}`)
     } else {
       assert(c.reason === null, `${c.name}: an issued quote carries a refusal reason`)
-      const landsAt = c.outcome === 'bound' ? c.h : mintToHash.settlement.paymentHash
+      const landsAt = c.outcome === 'bound' ? compared : mintToHash.settlement.paymentHash
       assert(c.noteId === landsAt, `${c.name}: the note lands at ${c.noteId}`)
     }
   }
@@ -385,6 +393,51 @@ check('the mint-to-hash refusals are the two the wire fixes, and no more', () =>
   assert(
     mintToHash.cases.some(c => c.h === ''),
     'nothing states what an empty h means, so a SERVICE is free to read it as absent'
+  )
+  // Upper case is a spelling, not a defect. Labelling it malformed would
+  // put this file at odds with a reference mint that normalises, which is
+  // exactly the quiet divergence a vector exists to prevent.
+  assert(
+    !mintToHash.cases.some(c => c.outcome === 'malformed-h' && /^[0-9a-fA-F]{64}$/.test(c.h ?? '')),
+    'a case calls 32 bytes of hex malformed on its casing alone'
+  )
+})
+
+check('the two spellings of one hash name one output', () => {
+  const rule = mintToHash.caseRule
+  assert(/MUST send/.test(rule.wallet), 'the wallet rule is not a MUST')
+  assert(/lowercase/.test(rule.wallet), 'the wallet rule does not say lowercase')
+  assert(/SHOULD normalise/.test(rule.service), 'the service rule does not say SHOULD normalise')
+  assert(/MUST NOT/.test(rule.service), 'the service rule does not forbid two outputs for one hash')
+
+  const n = mintToHash.normalisation
+  assert(n.sent !== n.comparedAs, 'the worked pair sends what it compares, so it shows nothing')
+  assert(n.comparedAs === n.sent.toLowerCase(), 'comparedAs is not the sent value lowercased')
+  assert(n.outputId === n.comparedAs, 'the output does not land at the compared id')
+  assert(n.sameOutputAs === n.comparedAs, 'the pair does not name the lowercase output it matches')
+  assert(n.comparedAs === noteId(n.walletSecret), 'the compared id is not the hash of the wallet secret')
+
+  // and the cases say it too: one upper-case spelling that binds where its
+  // lowercase twin binds, and one that collides where its twin collides
+  const upper = mintToHash.cases.filter(c => typeof c.h === 'string' && /[A-F]/.test(c.h))
+  assert(upper.length >= 2, 'fewer than two upper-case cases')
+  for (const c of upper) {
+    const twin = mintToHash.cases.find(
+      t => t !== c && t.comparedAs === c.comparedAs && !/[A-F]/.test(t.h ?? '')
+    )
+    assert(twin, `${c.name}: no lowercase twin to compare against`)
+    assert(
+      twin.outcome === c.outcome && twin.noteId === c.noteId,
+      `${c.name}: answered differently from its lowercase twin (${twin.outcome} vs ${c.outcome})`
+    )
+  }
+  assert(
+    upper.some(c => c.outcome === 'bound'),
+    'no upper-case case binds, so nothing states that the spellings are one output'
+  )
+  assert(
+    upper.some(c => c.outcome === 'collision'),
+    'no upper-case case collides, so nothing states that case is normalised before the collision check'
   )
 })
 

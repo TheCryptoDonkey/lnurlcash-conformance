@@ -123,8 +123,11 @@ advertised as mintToHash: true in three places - the payRequest (every
 mint has one, so decide from this), the mint address document (the same
 fact, corroboration), and the pay callback's own response (this quote was
 bound; the only one that cannot be stale). Anything not exactly the
-boolean true is no. A malformed h is refused with "Invalid h." before any
-invoice exists; an h already naming a note, an invoice or another quote's
+boolean true is no. A WALLET MUST send h as 64 lowercase hex; a SERVICE
+SHOULD normalise case before comparing and MUST NOT read AAAA... and
+aaaa... as two outputs, since keying the string handed over files the note
+where the wallet never looks. A malformed h - not 32 bytes of hex in any
+casing - is refused with "Invalid h." before any invoice exists; an h already naming a note, an invoice or another quote's
 output is refused with "Invalid or already spent k1.", the same reason the
 withdraw callback gives, so no oracle appears. A WALLET MUST persist its
 secret BEFORE asking for the invoice. Purely additive: without h, nothing

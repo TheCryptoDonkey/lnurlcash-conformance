@@ -9,6 +9,12 @@
     "optional": true,
     "absent": "today's behaviour, unchanged: the note is credited at the payment hash and its k1 is the payment preimage"
   },
+  "caseRule": {
+    "wallet": "A WALLET MUST send `h` as 64 lowercase hex. Strict on the producer side costs nothing and is what every implementation here does.",
+    "service": "A SERVICE SHOULD normalise case before comparing, and MUST NOT treat an otherwise well-formed upper-case `h` as a different output from its lowercase form. Hex is case-insensitive: both spellings are the same 32 bytes, so they name one output, not two.",
+    "whyItMatters": "A SERVICE that keys the string it was handed files the note under the upper-case spelling, and then cannot find it when the wallet asks the withdraw endpoint for its own lowercase secret. The money is not stolen, it is simply lost, and nobody is told. A SERVICE that instead refuses an upper-case `h` outright is being strict rather than wrong, and loses nobody anything - the wallet learns before it pays.",
+    "comparedAs": "Every case below carries `comparedAs`: the value a SERVICE compares and keys by, which is `h` lowercased, or null when `h` is absent or malformed."
+  },
   "advertisement": {
     "field": "mintToHash",
     "value": true,
@@ -40,9 +46,9 @@
     "collision": "Invalid or already spent k1."
   },
   "outcomes": {
-    "bound": "an invoice is issued carrying `mintToHash: true`, and on settlement the note is credited at `h`. The payment preimage names nothing",
+    "bound": "an invoice is issued carrying `mintToHash: true`, and on settlement the note is credited at `comparedAs` - `h` lowercased, which for a WALLET following the rule is `h` itself. The payment preimage names nothing",
     "unbound": "no `h` was sent: an invoice is issued and on settlement the note is credited at the payment hash, whose k1 is the payment preimage",
-    "malformed-h": "refused before any invoice exists, so a wallet never pays for a quote the SERVICE was always going to reject",
+    "malformed-h": "not 32 bytes of hex in any casing: refused before any invoice exists, so a wallet never pays for a quote the SERVICE was always going to reject",
     "collision": "refused before any invoice exists, with the same reason a colliding output hash gets on the withdraw callback, so a probe learns nothing about which ids exist"
   },
   "idsAlreadyInUse": {
@@ -56,6 +62,7 @@
       "name": "no h at all",
       "amountMsat": 21000,
       "h": null,
+      "comparedAs": null,
       "outcome": "unbound",
       "invoiced": true,
       "echo": false,
@@ -67,6 +74,7 @@
       "name": "a well-formed h",
       "amountMsat": 21000,
       "h": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
+      "comparedAs": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
       "outcome": "bound",
       "invoiced": true,
       "echo": true,
@@ -77,6 +85,7 @@
       "name": "an h that is not hex",
       "amountMsat": 21000,
       "h": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+      "comparedAs": null,
       "outcome": "malformed-h",
       "invoiced": false,
       "echo": false,
@@ -88,6 +97,7 @@
       "name": "an h one character short",
       "amountMsat": 21000,
       "h": "000000000000000000000000000000000000000000000000000000000000000",
+      "comparedAs": null,
       "outcome": "malformed-h",
       "invoiced": false,
       "echo": false,
@@ -98,6 +108,7 @@
       "name": "an h one character long",
       "amountMsat": 21000,
       "h": "00000000000000000000000000000000000000000000000000000000000000000",
+      "comparedAs": null,
       "outcome": "malformed-h",
       "invoiced": false,
       "echo": false,
@@ -108,6 +119,7 @@
       "name": "an empty h",
       "amountMsat": 21000,
       "h": "",
+      "comparedAs": null,
       "outcome": "malformed-h",
       "invoiced": false,
       "echo": false,
@@ -119,17 +131,19 @@
       "name": "an h in upper case hex",
       "amountMsat": 21000,
       "h": "F849D67325FACF04177BC663B2DC544051831C589EF581D412F2EBA44834E77C",
-      "outcome": "malformed-h",
-      "invoiced": false,
-      "echo": false,
-      "noteId": null,
-      "reason": "Invalid h.",
-      "why": "the rule is byte-identical to the withdraw callback's own: 64 lowercase hex. A SERVICE that lowercases first is not losing anyone money, but a wallet that relies on it will meet one that does not"
+      "comparedAs": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
+      "outcome": "bound",
+      "invoiced": true,
+      "echo": true,
+      "noteId": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
+      "reason": null,
+      "why": "the same 32 bytes as the lowercase case above, so it names the same output and lands at the same id. A WALLET still MUST send lowercase; a SERVICE that keys the upper-case string instead has filed the note where the wallet will never look for it"
     },
     {
       "name": "an h that already names a note",
       "amountMsat": 21000,
       "h": "e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e",
+      "comparedAs": "e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e",
       "outcome": "collision",
       "invoiced": false,
       "echo": false,
@@ -138,9 +152,22 @@
       "why": "every previous holder of that note knows the preimage of its id"
     },
     {
+      "name": "an h in upper case hex that already names a note",
+      "amountMsat": 21000,
+      "h": "E0E77A507412B120F6EDE61F62295B1A7B2FF19D3DCC8F7253E51663470C888E",
+      "comparedAs": "e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e",
+      "outcome": "collision",
+      "invoiced": false,
+      "echo": false,
+      "noteId": null,
+      "reason": "Invalid or already spent k1.",
+      "why": "case is normalised BEFORE the collision check, or an upper-case spelling walks straight past it and mints over a live note"
+    },
+    {
       "name": "an h that already names an invoice this SERVICE issued",
       "amountMsat": 21000,
       "h": "4bb06f8e4e3a7715d201d573d0aa423762e55dabd61a2c02278fa56cc6d294e0",
+      "comparedAs": "4bb06f8e4e3a7715d201d573d0aa423762e55dabd61a2c02278fa56cc6d294e0",
       "outcome": "collision",
       "invoiced": false,
       "echo": false,
@@ -152,6 +179,7 @@
       "name": "an h another quote is already waiting to credit",
       "amountMsat": 21000,
       "h": "2578ccf8645b2d1dc10c465eff843585970f3a7e22296a92cad55d489a272072",
+      "comparedAs": "2578ccf8645b2d1dc10c465eff843585970f3a7e22296a92cad55d489a272072",
       "outcome": "collision",
       "invoiced": false,
       "echo": false,
@@ -178,6 +206,15 @@
       "preimageIsAValidK1": true,
       "note": "the wallet must poll verify for the preimage, and rotate the instant it has it"
     }
+  },
+  "normalisation": {
+    "description": "One worked pair, so an implementation can check that the two spellings name one output rather than two.",
+    "sent": "F849D67325FACF04177BC663B2DC544051831C589EF581D412F2EBA44834E77C",
+    "comparedAs": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
+    "outputId": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
+    "sameOutputAs": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
+    "walletSecret": "0505050505050505050505050505050505050505050505050505050505050505",
+    "note": "A quote sent with the upper-case spelling settles into a note the wallet opens with its own secret, exactly as the lowercase spelling does. Two spellings, 32 bytes, one output."
   },
   "advertisements": [
     {
@@ -401,6 +438,7 @@
   ],
   "walletRules": [
     "A WALLET MUST persist its chosen secret BEFORE asking for the invoice. Paying and then losing the secret is the one way this makes things worse than the preimage scheme, and persisting first removes it.",
+    "A WALLET MUST send `h` as 64 lowercase hex. A SERVICE SHOULD normalise case before comparing and MUST NOT read the two spellings as two outputs, but a wallet that leans on that will meet a SERVICE that refuses upper case outright.",
     "A WALLET MUST decide from the payRequest, which every SERVICE publishes, rather than from the experimental mint address document, which many do not. A SERVICE that does not advertise `mintToHash` ignores `h`, and the note it mints is the preimage's.",
     "A WALLET MUST check the pay callback's own `mintToHash` before it pays. The other two advertisements can be cached or stale; that one is this quote, now. Absent means not bound, so claim the preimage way and rotate on sight.",
     "Against a SERVICE that does advertise it, a WALLET needs no verify poll to claim: it knows its own secret, so it asks the withdraw endpoint for it directly. Keep the poll as the fallback for SERVICEs without the capability.",

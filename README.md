@@ -174,7 +174,14 @@ exactly the boolean `true` is no.
 A mint that says nothing anywhere is reported as not offering it and passes,
 which is every mint today. A mint that claims it is asked to prove the
 refusals: a malformed `h` must get no invoice at all, since a wallet that
-pays for a quote the mint will reject has bought nothing. Where the three
+pays for a quote the mint will reject has bought nothing. Malformed means
+not 32 bytes of hex, in any casing. A wallet MUST send `h` as 64 lowercase
+hex and every client here does, but hex is case-insensitive, so a service
+SHOULD normalise before comparing and MUST NOT read `AAAA...` and `aaaa...`
+as two different outputs: keying the string it was handed files the note
+where the wallet will never look for it, and nobody is told. A service that
+refuses upper case outright is being strict rather than wrong, so the grader
+does not probe it either way. Where the three
 claims disagree, the grader names the disagreement rather than failing it:
 none of those loses anyone money on its own. What is failed is a mint that
 claims the capability and does not bind, because a wallet believing the

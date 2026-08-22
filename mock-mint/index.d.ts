@@ -139,6 +139,10 @@ export interface MockMintOptions {
    * from), the same on the mint address document (corroboration, for
    * consistency with the other capability fields there), and the same
    * echoed on the pay callback's own response when THAT quote was bound.
+   *
+   * Case is normalised before `h` is compared or keyed: hex is
+   * case-insensitive, so the two spellings are one output rather than
+   * two. A wallet still sends lowercase.
    */
   mintToHash?: boolean
   /**

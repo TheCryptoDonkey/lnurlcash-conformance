@@ -470,3 +470,37 @@ if (!caughtBy(resold, BOUND_CHECK)) {
   die('a mint selling a quote against a live note id PASSED - the grader is blind')
 }
 console.log('ok   a quote sold against a live note id caught')
+
+// Not a grade, a description. Hex is case-insensitive, so the two
+// spellings of one hash are one output: a WALLET MUST send lowercase, and
+// a SERVICE SHOULD normalise before comparing rather than key the string
+// it was handed, which would file the note where the wallet never looks.
+// Nothing probes a live mint for this - a mint that refuses upper case
+// outright is strict rather than wrong - but the mock is one of this
+// repo's three descriptions of the feature and has to agree with the
+// vector.
+{
+  const mint = await createMockMint({mintToHash: true, testHooks: true})
+  try {
+    const secret = bytesToHex(randomBytes(32))
+    const h = bytesToHex(sha256(hexToBytes(secret)))
+    const quote = await (await fetch(`${mint.url}/p/cb?amount=21000&h=${h.toUpperCase()}`)).json()
+    if (quote.status === 'ERROR') die(`the mock refused an upper-case h: ${quote.reason}`)
+    if (quote.mintToHash !== true) die('an upper-case h was taken without the quote saying it was bound')
+    const paymentHash = quote.verify.split('/').pop()
+    await fetch(`${mint.url}/_test/settle?payment_hash=${paymentHash}`)
+    const note = await (await fetch(`${mint.url}/w?k1=${secret}`)).json()
+    if (note.status === 'ERROR') {
+      die(`an upper-case h filed the note somewhere the wallet cannot reach it: ${note.reason}`)
+    }
+    if (note.maxWithdrawable !== 21000) die(`the note is worth ${note.maxWithdrawable}`)
+    // ...and the lowercase spelling is now the same taken id, not a free one
+    const twin = await (await fetch(`${mint.url}/p/cb?amount=21000&h=${h}`)).json()
+    if (twin.status !== 'ERROR') {
+      die('the lowercase spelling of a bound hash was sold again - the two spellings are being read as two outputs')
+    }
+  } finally {
+    await mint.close()
+  }
+}
+console.log('ok   the two spellings of one output hash name one note')
