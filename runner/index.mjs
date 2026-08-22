@@ -848,6 +848,22 @@ export const gradeNote = async (noteUrl, report, options = {}) => {
       : `verified offline against a previous signing key (${signedBy.slice(0, 16)}...)`
   })
 
+  await report.check('keeps signatures off the informational endpoint', async () => {
+    // LUD-25: "Signatures are only ever delivered in the
+    // withdrawSuccessResponse of a rotate, split or merge, the
+    // informational endpoint never returns one." A mint that hands one out
+    // here lets anyone holding only a note's PUBLIC url mint a certificate
+    // for it, and invites a wallet to treat the informational answer as an
+    // offline proof when it is an online one.
+    const here = new URL(url)
+    here.searchParams.set('k1', current)
+    const body = await get(here)
+    assert(body.status !== 'ERROR', `informational GET refused: ${body.reason}`)
+    assert(body.sig === undefined, 'the informational GET returned a sig')
+    assert(body.sig2 === undefined, 'the informational GET returned a sig2')
+    return 'no signature where the spec forbids one'
+  })
+
   // The still-alive probe the three adversarial checks below share: a
   // compliant refusal is ATOMIC, so the note it refused to touch must
   // still be spendable afterwards.
