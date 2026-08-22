@@ -4,7 +4,7 @@ Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may add or tighten checks that a previously-passing mint now fails; pin an
 exact version if you gate CI on the grade.
 
-## 0.2.0 - unreleased
+## 0.2.0 - 2026-08-22
 
 - Naming the note you are buying. In LUD-25 a minted note's `k1` is the
   payment preimage, so the preimage IS the money, and two sets of people
