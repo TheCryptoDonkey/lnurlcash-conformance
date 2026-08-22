@@ -70,7 +70,14 @@ const DEFAULTS = {
   // preimage it serves IS a bearer secret, so an operator needs a real
   // off switch.
   verify: true,
+  // Publish `payLink` on a note's informational GET, the way home for a
+  // holder who has nothing but the note. On by default because the
+  // reference mint does it; turn it off for a mint that does not.
+  noteInfoPayLink: true,
   // ---- misbehaviour ----
+  // point `payLink` at a DIFFERENT origin, nominating a third party to
+  // vouch for this mint's key history. A client must ignore it.
+  payLinkOffOrigin: false,
   // answer the informational GET with a k1 other than the one queried
   echoWrongK1: false,
   // report a maxWithdrawable that is not what the note is worth
@@ -673,6 +680,19 @@ export const createMockMint = async (options = {}) => {
         minWithdrawable: 0,
         maxWithdrawable: note.amountMsat + opts.lieAboutValue,
         defaultDescription: 'an LNURLcash note',
+        // The way home, as the reference mint publishes it. A holder with
+        // nothing but a note can reach the document carrying this mint's
+        // terms and its retired signing keys; without it a wallet that only
+        // ever received notes cannot tell an announced key rotation from a
+        // substituted key, because the document lives under a username the
+        // note never mentions.
+        ...(opts.noteInfoPayLink
+          ? {
+              payLink: opts.payLinkOffOrigin
+                ? 'https://elsewhere.example/.well-known/lnurlp/mint'
+                : `${origin}/.well-known/lnurlp/${opts.username}`
+            }
+          : {}),
         mintPubkey: pubkey
       })
     }

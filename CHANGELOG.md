@@ -4,6 +4,18 @@ Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may add or tighten checks that a previously-passing mint now fails; pin an
 exact version if you gate CI on the grade.
 
+## 0.2.2 - 2026-08-22
+
+- The mock mint publishes `payLink` on a note's informational GET, as the
+  reference mint does. That is the way home for a holder who has nothing
+  but a note: without it a wallet that only ever received notes cannot
+  reach the document carrying the mint's retired signing keys, so a
+  correctly announced key rotation is indistinguishable from a substituted
+  key. `noteInfoPayLink: false` models a mint that does not publish it, and
+  `payLinkOffOrigin: true` is the misbehaviour where a mint points its
+  `payLink` at a different origin, nominating a third party to vouch for
+  its own key history - a client must ignore that.
+
 ## 0.2.1 - 2026-08-22
 
 - The grader ships its own TypeScript declarations. The mock mint had them
