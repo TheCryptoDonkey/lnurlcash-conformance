@@ -1718,6 +1718,279 @@ const retriedMutation = {
   ]
 }
 
+// ---- vectors: naming the note you are buying -----------------------------
+
+// In LUD-25 a minted note\'s k1 is the payment preimage, so the preimage IS
+// the money. Two sets of people learn it without being trusted with it:
+// every routing node on the payment path, because that is how HTLC
+// settlement works, and anyone who has merely seen the invoice, because
+// they can poll LUD-21 verify with its payment hash and take the preimage
+// the moment it settles. A QR on a desktop screen is exactly that. "Rotate
+// immediately" is the only defence and it is a race.
+//
+// The fix needs no change to the draft, because the wallet already supplies
+// `h` for every other output it asks for: let it supply one on the mint
+// quote too. The mint credits the note at that id, and the preimage becomes
+// an ordinary payment proof that opens nothing.
+//
+// What has to be pinned is the parameter name, what counts as well-formed,
+// and the two refusal reasons - or two mints answer the same wallet two
+// different ways, and a wallet cannot tell "this mint has not implemented
+// it" from "this mint refused my hash".
+
+const MTH_SECRET = '05'.repeat(32)
+const MTH_H = noteId(MTH_SECRET)
+const MTH_PREIMAGE = '06'.repeat(32)
+const MTH_PAYMENT_HASH = noteId(MTH_PREIMAGE)
+
+// Ids that are already spoken for on the mint the cases below run against:
+// one note, one payment hash of an invoice it issued, and one output
+// another quote is already waiting to credit.
+const MTH_NOTE_ID = noteId(K1_A)
+const MTH_INVOICE_HASH = noteId('07'.repeat(32))
+const MTH_QUOTE_OUTPUT = noteId('08'.repeat(32))
+const MTH_IN_USE = [MTH_NOTE_ID, MTH_INVOICE_HASH, MTH_QUOTE_OUTPUT]
+
+const MTH_REASONS = {
+  malformed: 'Invalid h.',
+  collision: 'Invalid or already spent k1.'
+}
+
+const mintToHashOutcome = h => {
+  if (h === null) return 'unbound'
+  if (!/^[0-9a-f]{64}$/.test(h)) return 'malformed-h'
+  if (MTH_IN_USE.includes(h)) return 'collision'
+  return 'bound'
+}
+
+const mintToHashCase = (name, h, why) => {
+  const outcome = mintToHashOutcome(h)
+  return {
+    name,
+    amountMsat: 21000,
+    h,
+    outcome,
+    invoiced: outcome === 'bound' || outcome === 'unbound',
+    // the pay callback's own response says whether THIS quote was bound
+    echo: outcome === 'bound',
+    noteId: outcome === 'bound' ? h : outcome === 'unbound' ? MTH_PAYMENT_HASH : null,
+    reason:
+      outcome === 'malformed-h'
+        ? MTH_REASONS.malformed
+        : outcome === 'collision'
+          ? MTH_REASONS.collision
+          : null,
+    ...(why ? {why} : {})
+  }
+}
+
+// Only the boolean true is the capability, wherever it is read. A wallet
+// that accepts the string "true" will pay a mint that never implemented
+// it, and a wallet that reads an absent field as anything but false will
+// do the same.
+const mintToHashAdvertised = value => value === true
+
+const advertisementCase = (where, name, value, why) => {
+  const field = value === undefined ? {} : {mintToHash: value}
+  const body =
+    where === 'payRequest'
+      ? {
+          tag: 'payRequest',
+          callback: 'https://mint.example/p/cb',
+          minSendable: 1000,
+          maxSendable: 100000000,
+          metadata: meta([['text/plain', 'a mint']]),
+          withdrawLink: 'https://mint.example/w',
+          ...field
+        }
+      : where === 'mintAddress'
+        ? {
+            tag: 'withdrawRequest',
+            callback: 'https://mint.example/w',
+            minWithdrawable: 1000,
+            maxWithdrawable: 100000000,
+            payLink: 'https://mint.example/.well-known/lnurlp/mint',
+            mintPubkey: MINT_PUB,
+            ...field
+          }
+        : {
+            pr: 'lnbc210n1pjqrstuvwxyz',
+            verify: 'https://mint.example/verify/' + MTH_PAYMENT_HASH,
+            disposable: false,
+            ...field
+          }
+  return {
+    name,
+    where,
+    body,
+    offered: mintToHashAdvertised(value),
+    ...(why ? {why} : {})
+  }
+}
+
+const advertisementCases = where => [
+  advertisementCase(where, 'advertised', true),
+  advertisementCase(
+    where,
+    'absent',
+    undefined,
+    'the ordinary case, and not a defect: absence means no, and a mint without the feature says nothing anywhere'
+  ),
+  advertisementCase(where, 'the boolean false', false),
+  advertisementCase(
+    where,
+    'the string "true"',
+    'true',
+    'only the boolean true is the capability. A wallet that accepts the string will pay a mint that never implemented it'
+  ),
+  advertisementCase(where, 'the number 1', 1)
+]
+
+const mintToHash = {
+  version: VERSION,
+  spec: 'LUD-06, LUD-21, LUD-25',
+  description:
+    'Naming the note you are buying. A WALLET MAY add `h` to the LUD-06 pay callback when minting: the sha256 of a secret it chose, 32 bytes as 64 lowercase hex, exactly what `h` means on the withdraw callback. The SERVICE then credits the minted note at that id on settlement, and the payment preimage is NOT a valid k1 for it. That is the whole point: in LUD-25 a minted note\'s k1 is the payment preimage, so the preimage is the money, and two sets of people learn it without being trusted with it - every routing node on the payment path, and anyone who merely saw the invoice and polled LUD-21 verify with its payment hash. Without `h` nothing changes and the preimage is still the secret, so this is purely additive: a SERVICE that has not implemented it is not broken, it simply does not offer the capability. This file fixes the parameter name, what counts as well-formed, and both refusal reasons, so implementations in different languages answer the same wallet the same way.',
+  parameter: {
+    name: 'h',
+    on: 'the LUD-06 pay callback, alongside amount',
+    value: 'sha256 of a WALLET-chosen secret, 32 bytes as 64 lowercase hex',
+    optional: true,
+    absent: 'today\'s behaviour, unchanged: the note is credited at the payment hash and its k1 is the payment preimage'
+  },
+  advertisement: {
+    field: 'mintToHash',
+    value: true,
+    rule: 'Anything that is not exactly the boolean true is false, in all three places. An absent field means no, and a mint without the feature says nothing anywhere.',
+    places: [
+      {
+        where: 'payRequest',
+        means: 'I accept an `h` on my pay callback',
+        read: 'the LUD-06 payRequest at /.well-known/lnurlp/<user>',
+        why: 'the universal one. Every mint has a payRequest and the mint address document is experimental, so this is the one a wallet should decide from.'
+      },
+      {
+        where: 'mintAddress',
+        means: 'the same fact, again',
+        read: 'the experimental mint address document at /.well-known/lnurlw/<user>',
+        why: 'corroboration, kept for consistency with the other capability fields published there. A mint that publishes no mint address document is not saying no.'
+      },
+      {
+        where: 'quoteResponse',
+        means: 'I bound THIS quote to the hash you named',
+        read: 'the pay callback\'s own JSON response, alongside pr and verify',
+        why: 'per quote, and the one that matters at the moment money moves. A wallet reads it just before it parts with anything, and unlike the other two it cannot be cached or stale.'
+      }
+    ],
+    why: 'A wallet has to know before it asks rather than after it pays. A SERVICE that does not advertise it MAY still be sent `h`, and will ignore it - so a wallet that assumed otherwise has paid for a note whose secret the SERVICE generated.'
+  },
+  reasons: MTH_REASONS,
+  outcomes: {
+    bound:
+      'an invoice is issued carrying `mintToHash: true`, and on settlement the note is credited at `h`. The payment preimage names nothing',
+    unbound:
+      'no `h` was sent: an invoice is issued and on settlement the note is credited at the payment hash, whose k1 is the payment preimage',
+    'malformed-h':
+      'refused before any invoice exists, so a wallet never pays for a quote the SERVICE was always going to reject',
+    collision:
+      'refused before any invoice exists, with the same reason a colliding output hash gets on the withdraw callback, so a probe learns nothing about which ids exist'
+  },
+  idsAlreadyInUse: {
+    note: MTH_NOTE_ID,
+    invoicePaymentHash: MTH_INVOICE_HASH,
+    pendingQuoteOutput: MTH_QUOTE_OUTPUT,
+    why: 'An id already spoken for must never be minted over. A note\'s id has a preimage every previous holder knows; an invoice\'s payment hash points a future payer\'s money at a stranger\'s note, since its verify endpoint serves the preimage that IS the k1 of whatever sits under that id; and a second quote at an id another quote is already waiting to credit means whichever settles first takes it and the other payment lands nowhere.'
+  },
+  cases: [
+    mintToHashCase('no h at all', null, 'the LUD-25 flow as it stands: nothing here is a change'),
+    mintToHashCase('a well-formed h', MTH_H),
+    mintToHashCase(
+      'an h that is not hex',
+      'z'.repeat(64),
+      'the value is 32 bytes; a string that is not hex is not 32 bytes of anything'
+    ),
+    mintToHashCase('an h one character short', '0'.repeat(63)),
+    mintToHashCase('an h one character long', '0'.repeat(65)),
+    mintToHashCase(
+      'an empty h',
+      '',
+      'present and empty is not the same as absent. A wallet that sent `h=` meant to bind, and handing it an unbound quote in silence is how it pays for a note whose secret the SERVICE generated'
+    ),
+    mintToHashCase(
+      'an h in upper case hex',
+      MTH_H.toUpperCase(),
+      'the rule is byte-identical to the withdraw callback\'s own: 64 lowercase hex. A SERVICE that lowercases first is not losing anyone money, but a wallet that relies on it will meet one that does not'
+    ),
+    mintToHashCase(
+      'an h that already names a note',
+      MTH_NOTE_ID,
+      'every previous holder of that note knows the preimage of its id'
+    ),
+    mintToHashCase(
+      'an h that already names an invoice this SERVICE issued',
+      MTH_INVOICE_HASH,
+      'that invoice\'s verify endpoint serves the preimage which IS the k1 of whatever sits under the id'
+    ),
+    mintToHashCase(
+      'an h another quote is already waiting to credit',
+      MTH_QUOTE_OUTPUT,
+      'two payments, one output id: whichever settles first takes it and the other payer has bought nothing'
+    )
+  ],
+  settlement: {
+    description:
+      'One worked settlement, both ways round, so an implementation can check where the note landed rather than only that an invoice came back.',
+    walletSecret: MTH_SECRET,
+    h: MTH_H,
+    preimage: MTH_PREIMAGE,
+    paymentHash: MTH_PAYMENT_HASH,
+    bound: {
+      noteId: MTH_H,
+      k1: MTH_SECRET,
+      preimageIsAValidK1: false,
+      note: 'the wallet can claim by asking the withdraw endpoint for its own secret directly - it never needs the verify poll at all'
+    },
+    unbound: {
+      noteId: MTH_PAYMENT_HASH,
+      k1: MTH_PREIMAGE,
+      preimageIsAValidK1: true,
+      note: 'the wallet must poll verify for the preimage, and rotate the instant it has it'
+    }
+  },
+  advertisements: [
+    ...advertisementCases('payRequest'),
+    ...advertisementCases('mintAddress'),
+    ...advertisementCases('quoteResponse')
+  ],
+  contradictions: [
+    {
+      name: 'claims the capability and does not bind',
+      what: 'any of the three says `mintToHash: true`, and the minted note is still opened by the payment preimage',
+      verdict: 'broken',
+      why: 'the wallet was told it need not race the preimage, so it did not. The quote echo is the worst version of it, because the wallet was told at the very moment it decided to pay.'
+    },
+    {
+      name: 'binds and says nothing on the quote',
+      what: 'the payRequest advertises it, the quote carries `h`, and the response omits `mintToHash`',
+      verdict: 'safe but unconfirmable',
+      why: 'a wallet reading a missing field as false falls back to the preimage flow, which is safe. It simply cannot confirm at the one moment confirmation is worth anything.'
+    },
+    {
+      name: 'says nothing anywhere and ignores `h`',
+      what: 'no advertisement, no echo, and the note is the preimage\'s',
+      verdict: 'not implemented',
+      why: 'every mint today. Nothing about this is a defect.'
+    }
+  ],
+  walletRules: [
+    'A WALLET MUST persist its chosen secret BEFORE asking for the invoice. Paying and then losing the secret is the one way this makes things worse than the preimage scheme, and persisting first removes it.',
+    'A WALLET MUST decide from the payRequest, which every SERVICE publishes, rather than from the experimental mint address document, which many do not. A SERVICE that does not advertise `mintToHash` ignores `h`, and the note it mints is the preimage\'s.',
+    'A WALLET MUST check the pay callback\'s own `mintToHash` before it pays. The other two advertisements can be cached or stale; that one is this quote, now. Absent means not bound, so claim the preimage way and rotate on sight.',
+    'Against a SERVICE that does advertise it, a WALLET needs no verify poll to claim: it knows its own secret, so it asks the withdraw endpoint for it directly. Keep the poll as the fallback for SERVICEs without the capability.',
+    'A note minted at a WALLET-chosen hash is the WALLET\'s from birth. A wallet deriving its secrets from a seed can restore that note from the seed alone, which a preimage-secret note can never be.'
+  ]
+}
+
 // ---- vectors: payment requests -------------------------------------------
 
 // "Send me 500 sat" as a string a payer's wallet can act on: the amount,
@@ -2132,7 +2405,8 @@ const files = [
   write('threat-suite.json', threatSuite),
   write('payment-request.json', paymentRequest),
   write('settle-for-value.json', settleForValue),
-  write('retried-mutation.json', retriedMutation)
+  write('retried-mutation.json', retriedMutation),
+  write('mint-to-hash.json', mintToHash)
 ]
 
 write('index.json', {

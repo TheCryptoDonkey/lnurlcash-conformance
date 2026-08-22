@@ -4,10 +4,12 @@
 // process, no ports or log scraping.
 
 import {bech32} from '@scure/base'
-import {bytesToHex, randomBytes} from '@noble/hashes/utils.js'
+import {sha256} from '@noble/hashes/sha2.js'
+import {bytesToHex, hexToBytes, randomBytes} from '@noble/hashes/utils.js'
 import {createMockMint} from '../mock-mint/index.mjs'
 import {
   createReport,
+  gradeBoundMint,
   gradeMint,
   gradeMintedValue,
   gradeNote,
@@ -325,3 +327,146 @@ if (statusOf(replaying, REPLAYED_BURN) !== 'pass') {
   die(`replaying retries opened a double-spend: ${detailOf(replaying, REPLAYED_BURN)}`)
 }
 console.log('ok   a mint replaying a retried mutation passes, and a real double-spend is still refused')
+
+// ---- naming the note you are buying ------------------------------------
+//
+// A wallet may name the output hash of the note it is minting, so the
+// payment preimage stops being the money. Optional and off: a mint that
+// has not implemented it mints exactly what LUD-25 describes, and must
+// still grade clean.
+
+const MINT_TO_HASH_CHECK = 'accepts an output hash on the mint quote (mintToHash, optional)'
+const BOUND_CHECK = 'a bound mint credits the hash the wallet named (optional)'
+
+if (statusOf(bare, MINT_TO_HASH_CHECK) !== 'warn') {
+  die(`a mint not offering mintToHash did not warn: ${statusOf(bare, MINT_TO_HASH_CHECK)}`)
+}
+if (bare.failed > 0) die('a mint not offering mintToHash FAILED the grade - the capability is optional')
+console.log('ok   a mint not offering mintToHash warns and still passes')
+
+const binding = await grade({mintToHash: true})
+if (binding.failed > 0) {
+  console.error('a mint offering mintToHash FAILED grading:')
+  for (const r of binding.results.filter(r => r.status === 'fail')) {
+    console.error(`  FAIL ${r.name} - ${r.detail}`)
+  }
+  process.exit(1)
+}
+if (statusOf(binding, MINT_TO_HASH_CHECK) !== 'pass') {
+  die(`a mint honouring mintToHash did not pass: ${detailOf(binding, MINT_TO_HASH_CHECK)}`)
+}
+for (const where of ['the payRequest', 'the mint address', 'the quote itself']) {
+  if (!detailOf(binding, MINT_TO_HASH_CHECK).includes(where)) {
+    die(`the report does not name ${where} as claiming it: ${detailOf(binding, MINT_TO_HASH_CHECK)}`)
+  }
+}
+console.log('ok   a mint offering mintToHash passes, and the report names all three claims')
+
+// A malformed h must be refused before an invoice exists, or a wallet pays
+// for a quote the mint was always going to reject and the mint keeps the
+// sats. That is damage, so it fails rather than warns.
+const sloppy = await grade({mintToHash: true, mintToHashAcceptsMalformedH: true})
+if (!caughtBy(sloppy, MINT_TO_HASH_CHECK)) {
+  die('a mint invoicing a malformed h PASSED - the grader is blind')
+}
+console.log('ok   an invoice issued for a malformed h caught')
+
+// The capability is claimed in three places - the payRequest, the mint
+// address document and the quote's own response - and they must agree.
+// None of the disagreements loses anyone money on its own, so each is
+// named rather than failed, but the grader has to notice all three.
+
+const disagreement = async (places, wanted) => {
+  const report = await grade({mintToHash: true, mintToHashAdvertisedOn: places})
+  if (statusOf(report, MINT_TO_HASH_CHECK) !== 'warn') {
+    die(
+      `a mint claiming mintToHash only on ${places} did not warn: ${statusOf(report, MINT_TO_HASH_CHECK)}`
+    )
+  }
+  if (report.failed > 0) {
+    die(`a mint claiming mintToHash only on ${places} FAILED - a disagreement is named, never failed`)
+  }
+  const detail = detailOf(report, MINT_TO_HASH_CHECK)
+  if (!wanted.test(detail)) die(`the report does not name the disagreement: ${detail}`)
+  return detail
+}
+
+await disagreement('payRequest,mintAddress', /no mintToHash in the response/)
+console.log('ok   a mint that binds without confirming on the quote warns and names it')
+
+// A mint that echoes on the quote and advertises nowhere is still
+// claiming the capability, so the grader must engage rather than report
+// it unimplemented.
+await disagreement('quote', /does not advertise it on the payRequest/)
+console.log('ok   a mint echoing on the quote alone is graded, not written off as unimplemented')
+
+await disagreement('payRequest,quote', /mint address document does not/)
+console.log('ok   a mint address that contradicts the payRequest warns and names it')
+
+// Two quotes against one output id is soft: the draft says nothing, and
+// the refusal is an inference from the collision rule the withdraw
+// callback already enforces. Named, never failed.
+const doubleSold = await grade({mintToHash: true, mintToHashAcceptsUsedH: true})
+if (statusOf(doubleSold, MINT_TO_HASH_CHECK) !== 'warn') {
+  die(`a mint selling one output id twice did not warn: ${statusOf(doubleSold, MINT_TO_HASH_CHECK)}`)
+}
+if (doubleSold.failed > 0) die('a mint selling one output id twice FAILED - that refusal is an inference, so it warns')
+console.log('ok   a second quote against one output id warns and never fails')
+
+// ---- the paid half -----------------------------------------------------
+//
+// Whether the note really landed at the hash the wallet named, and whether
+// the preimage still opens it, can only be answered after a settlement.
+// The mock invents its invoices, so the test hooks settle one.
+
+const gradeBound = async (mockOptions = {}) => {
+  const mint = await createMockMint({testHooks: true, mintToHash: true, ...mockOptions})
+  try {
+    const secret = bytesToHex(randomBytes(32))
+    const h = bytesToHex(sha256(hexToBytes(secret)))
+    const quote = await (await fetch(`${mint.url}/p/cb?amount=21000&h=${h}`)).json()
+    if (quote.status === 'ERROR') die(`the mock refused a well-formed h: ${quote.reason}`)
+    const paymentHash = quote.verify.split('/').pop()
+    await fetch(`${mint.url}/_test/settle?payment_hash=${paymentHash}`)
+    const preimage = mint.state.invoices.get(paymentHash).preimage
+    const report = createReport()
+    await gradeBoundMint(`${mint.url}/w?k1=${secret}`, report, {
+      preimage,
+      payCallback: `${mint.url}/p/cb`
+    })
+    return report
+  } finally {
+    await mint.close()
+  }
+}
+
+const bound = await gradeBound()
+if (bound.failed > 0) {
+  console.error('a mint crediting the note at the hash the wallet named FAILED:')
+  for (const r of bound.results.filter(r => r.status === 'fail')) {
+    console.error(`  FAIL ${r.name} - ${r.detail}`)
+  }
+  process.exit(1)
+}
+if (!/preimage opens nothing/.test(detailOf(bound, BOUND_CHECK))) {
+  die(`the report does not say the preimage opens nothing: ${detailOf(bound, BOUND_CHECK)}`)
+}
+console.log('ok   a bound mint credits the wallet\'s own hash, and the preimage opens nothing')
+
+// The mint that advertises the capability, takes the parameter, and mints
+// the note at the payment hash anyway. The wallet stopped rotating on
+// sight because it was told it did not need to, so this is the worst of
+// both schemes and must fail.
+const lying = await gradeBound({mintToHashIgnoresH: true})
+if (!caughtBy(lying, BOUND_CHECK)) {
+  die('a mint advertising mintToHash and minting at the preimage hash anyway PASSED - the grader is blind')
+}
+console.log('ok   a mint binding nothing while advertising that it does caught')
+
+// And the id a settled note occupies must not be sellable as a fresh
+// quote: the payer would be buying a note somebody else can already spend.
+const resold = await gradeBound({mintToHashAcceptsUsedH: true})
+if (!caughtBy(resold, BOUND_CHECK)) {
+  die('a mint selling a quote against a live note id PASSED - the grader is blind')
+}
+console.log('ok   a quote sold against a live note id caught')

@@ -25,6 +25,7 @@ pay-request.json     minting, LUD-11, LUD-21
 payment-request.json lnurlcashreq1: asking another holder for value
 settle-for-value.json the decision table for taking a note as payment
 retried-mutation.json what makes a repeat a retry, not a double-spend
+mint-to-hash.json    naming the note you are buying: h on the pay callback
 lifecycle.json       behavioural scenarios
 threat-suite.json    transport/exposure scorecard, options vs attacks (non-normative)
 
@@ -45,6 +46,17 @@ retriedMutation=replay (a byte-identical repeat of a mutation gets the
 original success back instead of "already spent"; the default 'refuse' is
 what the mock has always done).
 
+mintToHash=true (the pay callback takes an optional h - 64 lowercase hex,
+sha256 of a WALLET-chosen secret, the same thing h means on the withdraw
+callback - and credits the minted note there, so the payment preimage is
+not a valid k1). Advertised in three places: mintToHash: true on the
+payRequest, the same on the mint address document, and the same echoed on
+the pay callback's own response when THAT quote was bound.
+mintToHashAdvertisedOn=payRequest,mintAddress,quote narrows which of the
+three claim it (all three by default; it changes only what is claimed).
+Misbehaviours, each needing mintToHash as well: mintToHashAcceptsMalformedH,
+mintToHashAcceptsUsedH, mintToHashIgnoresH.
+
 Optional extensions, all outside LUD-25, all absent or off by default:
 name, description, contact, tosUrl, motd, version (mint info on
 /.well-known/lnurlw/<user>); fees (emitted there whenever a fee is
@@ -60,6 +72,7 @@ CLI: npx lnurlcash-mock-mint --port=8899  (nothing is payable)
 ## Grader
 
 npx lnurlcash-conform mint@example.com                        read-only
+npx lnurlcash-conform mint@example.com --note=<url> --preimage=<hex>  bound mint
 npx lnurlcash-conform mint@example.com --note=<url> --spend   full, burns the note
 
 Exit code non-zero on any failure. The optional extensions are graded
@@ -97,6 +110,25 @@ signature when required -> value >= price -> rotate. The rotate is LAST:
 it is the settlement and the double-spend check in one call, and a server
 that rotates before comparing the amount has taken the money and refused
 the request. Full table in settle-for-value.json.
+
+## Naming the note you are buying
+
+In LUD-25 a minted note's k1 is the payment preimage, so the preimage IS
+the money, and two sets of untrusted people learn it: every routing node
+on the payment path, and anyone who saw the invoice and polled LUD-21
+verify with its payment hash. A WALLET MAY instead send h=<64 lowercase
+hex> on the LUD-06 pay callback, the sha256 of a secret it chose; the
+SERVICE credits the note there and the preimage opens nothing. Support is
+advertised as mintToHash: true in three places - the payRequest (every
+mint has one, so decide from this), the mint address document (the same
+fact, corroboration), and the pay callback's own response (this quote was
+bound; the only one that cannot be stale). Anything not exactly the
+boolean true is no. A malformed h is refused with "Invalid h." before any
+invoice exists; an h already naming a note, an invoice or another quote's
+output is refused with "Invalid or already spent k1.", the same reason the
+withdraw callback gives, so no oracle appears. A WALLET MUST persist its
+secret BEFORE asking for the invoice. Purely additive: without h, nothing
+changes. Table in mint-to-hash.json.
 
 ## The retried mutation
 

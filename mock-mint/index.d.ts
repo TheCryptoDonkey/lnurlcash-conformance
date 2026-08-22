@@ -10,6 +10,9 @@ export type WithdrawLinkForm = 'lnurlw' | 'plain'
 
 export type RetriedMutation = 'refuse' | 'replay'
 
+/** where a mint claims it accepts an `h` on its pay callback */
+export type MintToHashPlace = 'payRequest' | 'mintAddress' | 'quote'
+
 export interface MockMintOptions {
   username?: string
   minSendableMsat?: number
@@ -121,6 +124,54 @@ export interface MockMintOptions {
   stats?: boolean
   /** what the node behind a stats-publishing mock claims to hold */
   localBalanceMsat?: number
+  /**
+   * Let a WALLET name the note it is buying. Off, and nothing about it
+   * reaches the wire: nothing is advertised anywhere and the pay callback
+   * does not read `h` at all. On, the callback takes an optional `h` - 64
+   * lowercase hex, the sha256 of a secret the wallet chose, the same
+   * thing `h` means on the withdraw callback - and credits the note at
+   * that id when the invoice settles. The payment preimage is then not a
+   * valid k1 for that note, which matters because every routing node on
+   * the payment path learns it, and so does anyone who saw the invoice.
+   *
+   * The capability is advertised in three places: `mintToHash: true` on
+   * the payRequest (every mint has one, so it is what a wallet decides
+   * from), the same on the mint address document (corroboration, for
+   * consistency with the other capability fields there), and the same
+   * echoed on the pay callback's own response when THAT quote was bound.
+   */
+  mintToHash?: boolean
+  /**
+   * non-compliant, and only reachable with mintToHash on: issue an
+   * invoice for an `h` that is not 64 lowercase hex, so a wallet pays for
+   * a quote this mint was always going to refuse.
+   */
+  mintToHashAcceptsMalformedH?: boolean
+  /**
+   * non-compliant, mintToHash on: issue an invoice for an `h` that
+   * already names a note, an invoice or another quote's output, so two
+   * payers' money points at one id.
+   */
+  mintToHashAcceptsUsedH?: boolean
+  /**
+   * non-compliant, mintToHash on: advertise the capability, echo it back
+   * on the quote, and credit the note at the payment hash anyway - the
+   * preimage is still the money and the wallet's own secret names
+   * nothing. The wallet stopped rotating on sight because it was told it
+   * did not need to, so this is the worst of both schemes.
+   */
+  mintToHashIgnoresH?: boolean
+  /**
+   * Which of the three places this mock claims the capability in.
+   * Undefined means all three, which is what an honest mint publishes.
+   * Narrowing it changes only what is CLAIMED, never what the mint does:
+   * `['quote']` is the mint that shipped the feature before the
+   * advertisement, and `['payRequest', 'mintAddress']` is the one that
+   * binds without confirming at the moment money moves. Read only when
+   * mintToHash is on. A comma-separated string is accepted so the CLI can
+   * pass one.
+   */
+  mintToHashAdvertisedOn?: MintToHashPlace[] | string
 }
 
 export interface MintContact {
@@ -145,7 +196,16 @@ export interface MintLiabilities {
 
 export interface MockMintState {
   notes: Map<string, {amountMsat: number; state: NoteState; pendingSince?: number}>
-  invoices: Map<string, {amountMsat: number; preimage: string; settled: boolean}>
+  invoices: Map<
+    string,
+    {
+      amountMsat: number
+      preimage: string
+      settled: boolean
+      /** the output id this quote was bound to, when the wallet named one */
+      boundTo?: string
+    }
+  >
   pubkey: string
   /** the keys this mint has signed under before, as the discovery endpoint publishes them */
   previousPubkeys: string[]

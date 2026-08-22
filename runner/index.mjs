@@ -449,6 +449,137 @@ export const gradeMint = async (payUrl, report) => {
     return detail
   })
 
+  // Naming the note you are buying. Optional, outside LUD-25, and soft in
+  // the direction that matters: a mint that says nothing anywhere and
+  // ignores `h` mints exactly what the draft describes, which is every
+  // mint today and not a defect. What is graded is a mint that CLAIMS the
+  // capability, because a wallet then stops rotating on sight and trusts
+  // the mint to bind the note.
+  //
+  // The claim lives in three places and they say different things. The
+  // payRequest's `mintToHash: true` means "I accept an h on my pay
+  // callback", and since every mint publishes a payRequest while the mint
+  // address document is experimental, that is the one to decide from. The
+  // mint address document repeats it, as corroboration. The pay
+  // callback's own response echoes it when THAT quote was bound, which is
+  // the one that matters at the moment money moves: the other two can be
+  // cached or stale. Anything that is not exactly the boolean true is no.
+  await report.check('accepts an output hash on the mint quote (mintToHash, optional)', async () => {
+    const amount = Math.max(pay.minSendable, 1000)
+    const quoteAt = async (h, msat = amount) => {
+      const url = new URL(pay.callback)
+      url.searchParams.set('amount', String(msat))
+      url.searchParams.set('h', h)
+      return get(url)
+    }
+
+    // Asked of every mint, advertisement or not: a mint that echoes the
+    // capability without publishing it is still claiming it, and a wallet
+    // reading the echo would believe it. Nothing pays the invoice that
+    // comes back, so this is read-only - an unpaid quote costs a mint an
+    // invoice and nothing else.
+    const secret = bytesToHex(randomBytes(32))
+    const h = noteId(secret)
+    const bound = await quoteAt(h)
+    const advertised = pay.mintToHash === true
+    const corroborated = mintAddress?.mintToHash === true
+    const echoed = bound.mintToHash === true
+
+    if (!advertised && !corroborated && !echoed) {
+      throw soft(
+        bound.status === 'ERROR'
+          ? `not offered, and an h on the quote was refused outright: ${bound.reason}`
+          : 'not offered - a minted note\'s k1 is the invoice preimage, which every routing node on the payment path learns, so a wallet must claim and rotate the instant it settles'
+      )
+    }
+
+    const problems = []
+    const claimedBy = [
+      advertised && 'the payRequest',
+      corroborated && 'the mint address',
+      echoed && 'the quote itself'
+    ].filter(Boolean)
+
+    assert(
+      bound.status !== 'ERROR',
+      `claims mintToHash (${claimedBy.join(', ')}) and refused a well-formed h: ${bound.reason}`
+    )
+    assert(typeof bound.pr === 'string', 'no pr in the response')
+    const invoiced = invoiceAmountMsat(bound.pr)
+    if (invoiced !== null) {
+      assert(invoiced === amount, `asked for ${amount} msat, invoiced ${invoiced} msat`)
+    }
+
+    // A quote is not a note. Crediting one before its invoice settles
+    // would hand out money for nothing.
+    const withdrawUrl = pay.withdrawLink ? fromLud17(pay.withdrawLink) : null
+    if (withdrawUrl) {
+      const probe = new URL(withdrawUrl)
+      probe.searchParams.set('k1', secret)
+      const early = await get(probe)
+      assert(
+        early.status === 'ERROR',
+        'the note exists before anything paid for it - a quote is not a note'
+      )
+    }
+
+    // A malformed h must be refused BEFORE an invoice exists. A wallet
+    // that pays a quote the mint was always going to reject has bought
+    // nothing, and the mint keeps the sats. Upper-case hex is not probed:
+    // the wire is 64 lowercase hex, but a mint that lowercases first is
+    // not losing anyone money and grading it would be picking a fight.
+    for (const [what, value] of [
+      ['not hex', 'z'.repeat(64)],
+      ['a character short', '0'.repeat(63)],
+      ['a character long', '0'.repeat(65)],
+      ['empty', '']
+    ]) {
+      const body = await quoteAt(value)
+      assert(
+        body.status === 'ERROR' && !body.pr,
+        `issued an invoice for an h that is ${what} - a wallet would pay for a quote this mint cannot honour`
+      )
+    }
+
+    // The three claims must agree. None of these disagreements loses
+    // anyone money on its own - a wallet reading a missing field as false
+    // falls back to the preimage flow, which is safe - so each is named
+    // rather than failed. Whether the mint really binds is the one thing
+    // this check cannot see, because that needs a settlement: it is
+    // graded separately, and failed rather than warned.
+    if (!echoed) {
+      problems.push(
+        'bound quotes carry no mintToHash in the response, so a wallet cannot confirm at the one moment it is worth confirming, and falls back to racing the preimage'
+      )
+    }
+    if (echoed && !advertised) {
+      problems.push(
+        'echoes mintToHash on a quote but does not advertise it on the payRequest, which is the endpoint every mint publishes and the one a wallet decides from'
+      )
+    }
+    if (advertised && mintAddress && !corroborated) {
+      problems.push('the payRequest advertises mintToHash and the mint address document does not')
+    }
+
+    // The same output id asked for twice. The amount differs, so a mint
+    // that answers an identical repeat with the original invoice cannot
+    // hide behind that: this is genuinely two payments pointed at one id,
+    // and whichever settles first takes it. Soft, because the draft says
+    // nothing here and the refusal is an inference from the collision
+    // rule the withdraw callback already enforces.
+    const otherAmount = Math.min(pay.maxSendable, amount * 2)
+    if (otherAmount !== amount) {
+      const twice = await quoteAt(h, otherAmount)
+      if (twice.status !== 'ERROR') {
+        problems.push(
+          'issued a second quote against an output hash it had already bound - whichever payment settles first takes the id, and the other payer has bought nothing'
+        )
+      }
+    }
+    if (problems.length > 0) throw soft(problems.join('; '))
+    return `claimed by ${claimedBy.join(', ')}; bound a quote to a hash of the runner's own secret and refused four malformed ones`
+  })
+
   // The payRequest, with the mint address the checks above fetched hung
   // off it: a caller grading a note afterwards needs previousPubkeys from
   // it, and fetching the same endpoint twice to get them would be silly.
@@ -501,6 +632,69 @@ export const gradeMintedValue = async (noteUrl, report, {mintFee = null, paidMsa
           ? 'fee ceilinged to a whole sat, as the reference mint does'
           : 'inside the band'
     return `${paidMsat} msat paid -> ${info.maxWithdrawable} msat note (${feeText}, ${how})`
+  })
+}
+
+// ---- the bound mint check -------------------------------------------------
+//
+// Read-only, and like the minted-value check it needs something the runner
+// cannot make on its own: a note somebody has actually paid for. Given a
+// note minted against a hash the WALLET chose - the note URL carries the
+// wallet's own secret - and the payment preimage of the invoice that funded
+// it, this checks the two things binding exists to buy: the note really is
+// at the secret the wallet named, and the preimage is not a second key to
+// it. The preimage matters because everyone on the payment's route learns
+// it, and so does anyone who saw the invoice and polled LUD-21 verify.
+//
+// options.payCallback: the mint's LUD-06 callback, when the caller has it.
+// With it, the runner also checks that the id the note now occupies cannot
+// be sold again as a mint quote.
+export const gradeBoundMint = async (noteUrl, report, {preimage, payCallback = null}) => {
+  await report.check('a bound mint credits the hash the wallet named (optional)', async () => {
+    const url = new URL(fromLud17(noteUrl))
+    const k1 = url.searchParams.get('k1')?.toLowerCase()
+    assert(k1 && /^[0-9a-f]{64}$/.test(k1), 'that note carries no 32-byte hex k1')
+    assert(
+      typeof preimage === 'string' && /^[0-9a-f]{64}$/i.test(preimage),
+      'pass the payment preimage of the invoice that minted this note'
+    )
+    const paid = preimage.toLowerCase()
+    assert(
+      paid !== k1,
+      'the note secret IS the payment preimage - this note was never bound to a hash the wallet named'
+    )
+
+    const info = await get(url)
+    assert(
+      info.status !== 'ERROR',
+      `there is no note at the secret the wallet named its hash for: ${info.reason}. A mint claiming mintToHash and crediting somewhere else has taken money for a note the wallet cannot spend`
+    )
+    assert(Number.isFinite(info.maxWithdrawable), 'no maxWithdrawable')
+
+    const byPreimage = new URL(url)
+    byPreimage.searchParams.set('k1', paid)
+    const leaked = await get(byPreimage)
+    assert(
+      leaked.status === 'ERROR',
+      'the payment preimage is still a valid secret for this payment - a mint that claims mintToHash and then does not bind is worse than one that never claimed it, because the wallet stopped rotating on sight. Every routing node on the route, and anyone who saw the invoice, can spend this note'
+    )
+
+    // The id is now a live note. Selling a mint quote against it would
+    // point a payer's money at somebody else's money.
+    let quoteDetail = ''
+    if (payCallback) {
+      const quote = new URL(payCallback)
+      quote.searchParams.set('amount', '1000')
+      quote.searchParams.set('h', noteId(k1))
+      const body = await get(quote)
+      assert(
+        body.status === 'ERROR' && !body.pr,
+        'sold a mint quote against an h that already names a live note - the payer would be buying a note somebody else can spend'
+      )
+      quoteDetail = `, and refused a quote at the id it occupies (${body.reason})`
+    }
+
+    return `${info.maxWithdrawable} msat at the wallet's own secret, and the preimage opens nothing${quoteDetail}`
   })
 }
 
