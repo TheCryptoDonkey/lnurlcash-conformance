@@ -4,6 +4,16 @@ Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may add or tighten checks that a previously-passing mint now fails; pin an
 exact version if you gate CI on the grade.
 
+## 0.2.3 - 2026-08-22
+
+- **New check: `keeps signatures off the informational endpoint`.** LUD-25
+  says signatures are only ever delivered in the `withdrawSuccessResponse`
+  of a rotate, split or merge, and that the informational endpoint never
+  returns one. Nothing graded it. A mint that hands one out there lets
+  anyone holding a note's public URL mint an offline certificate for it,
+  and invites a wallet to treat an online answer as offline proof. Both
+  known mints pass; the check exists so a third cannot quietly not.
+
 ## 0.2.2 - 2026-08-22
 
 - The mock mint publishes `payLink` on a note's informational GET, as the
