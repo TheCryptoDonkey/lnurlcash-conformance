@@ -38,7 +38,19 @@ export interface MockMintOptions {
   verify?: boolean
   privateKey?: string
 
+  /**
+   * Publish `payLink` on a note's informational GET - the way home for a
+   * holder who has nothing but the note. On by default, as the reference
+   * mint does it.
+   */
+  noteInfoPayLink?: boolean
+
   // ---- misbehaviour ----
+  /**
+   * Point `payLink` at a different origin, nominating a third party to
+   * vouch for this mint's key history. A client must ignore it.
+   */
+  payLinkOffOrigin?: boolean
   /** answer the informational GET with a k1 other than the one queried */
   echoWrongK1?: boolean
   /** report a maxWithdrawable that is not what the note is worth */
