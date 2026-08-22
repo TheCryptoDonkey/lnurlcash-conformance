@@ -156,6 +156,51 @@ const DEFAULTS = {
   localBalanceMsat: 100_000_000_000,
   // fees are emitted on the discovery endpoint whenever one is configured
   // (baseFeeMsat or feePpm above zero); a fee-free mint publishes nothing
+  //
+  // ---- naming the note you are buying ----
+  //
+  // Off, and nothing about it reaches the wire: nothing is advertised
+  // anywhere, the pay callback does not read `h` at all, and a minted
+  // note's secret is the payment preimage exactly as it always was.
+  //
+  // On, a WALLET MAY add h=<64 lowercase hex> to the LUD-06 pay callback -
+  // the sha256 of a secret it chose, the same thing `h` means on the
+  // withdraw callback. The note is then credited at that id when the
+  // invoice settles, and the payment preimage is NOT a valid k1 for it.
+  // Which matters because two sets of untrusted people learn a preimage:
+  // every routing node on the payment path, and anyone who merely saw the
+  // invoice and polled /verify with its payment hash.
+  //
+  // The capability is claimed in three places and they say different
+  // things. `mintToHash: true` on the payRequest means "I accept an h on
+  // my pay callback", and since every mint publishes a payRequest while
+  // the mint address document is experimental, that is the one a wallet
+  // decides from. The mint address document repeats it, as corroboration.
+  // The pay callback's own response echoes it when THAT quote was bound,
+  // which is the one that matters at the moment money moves: the other
+  // two can be cached or stale.
+  mintToHash: false,
+  // non-compliant, and only reachable with mintToHash on: issue an
+  // invoice for an `h` that is not 64 lowercase hex, so a wallet pays for
+  // a quote this mint was always going to refuse
+  mintToHashAcceptsMalformedH: false,
+  // non-compliant, mintToHash on: issue an invoice for an `h` that
+  // already names a note, an invoice or another quote's output, so two
+  // payers' money points at one id
+  mintToHashAcceptsUsedH: false,
+  // non-compliant, mintToHash on: advertise the capability, echo it back
+  // on the quote, and credit the note at the payment hash anyway. The
+  // wallet stopped rotating on sight because it was told it did not need
+  // to, so this is the worst of both schemes
+  mintToHashIgnoresH: false,
+  // Which of the three the mock actually says it in. Undefined means all
+  // three, which is what an honest mint publishes. Narrowing it changes
+  // only what is CLAIMED, never what the mint does: 'quote' alone is the
+  // mint that shipped the feature before the advertisement, and
+  // 'payRequest,mintAddress' is the one that binds without confirming at
+  // the moment money moves. Read only when mintToHash is on. Accepts an
+  // array or a comma-separated string, so the CLI can pass one.
+  mintToHashAdvertisedOn: undefined
 }
 
 export const createMockMint = async (options = {}) => {
@@ -183,6 +228,17 @@ export const createMockMint = async (options = {}) => {
   const contact =
     typeof opts.contact === 'string' ? JSON.parse(opts.contact) : opts.contact
 
+  // Where this mock claims to accept an `h` on its pay callback. All three
+  // unless told otherwise, and empty when the capability is off, so a mock
+  // started with no options claims nothing anywhere.
+  const mintToHashPlaces = new Set(
+    opts.mintToHash
+      ? opts.mintToHashAdvertisedOn === undefined
+        ? ['payRequest', 'mintAddress', 'quote']
+        : asList(opts.mintToHashAdvertisedOn)
+      : []
+  )
+
   // notes are stored by id - sha256(k1) - never by the secret itself. For a
   // freshly minted note that id is exactly the payment hash of the invoice
   // that funded it, so the preimage never needs to be persisted at all.
@@ -193,6 +249,19 @@ export const createMockMint = async (options = {}) => {
   // alone would let anyone holding a burned k1 and any outstanding note
   // id pull a success out of the mint.
   const swaps = new Map() // identity -> [{id, amountMsat}]
+  // Output ids a mint quote has already claimed: h -> the payment hash of
+  // the invoice that will credit it. Only ever written when mintToHash is
+  // on, so with the option off this is empty and every collision check
+  // below asks exactly what it asked before.
+  const boundOutputs = new Map()
+
+  // An id is spoken for if it is a note in any state, the payment hash of
+  // an invoice this mint issued, or the output a bound quote is waiting
+  // to credit. Minting over any of them hands the output to somebody who
+  // already knows how to spend it, or bricks a payment that can no longer
+  // land.
+  const outputIdInUse = id =>
+    notes.has(id) || invoices.has(id) || boundOutputs.has(id)
 
   // What makes a request the same request: the same input k1 set, the
   // same h, the same h2, the same amount. The inputs are a set rather
@@ -298,9 +367,13 @@ export const createMockMint = async (options = {}) => {
       const invoice = hash ? invoices.get(hash) : null
       if (!invoice) return fail('unknown payment hash')
       invoice.settled = true
-      // paying a mint invoice is what brings its note into existence: the
-      // preimage IS the note secret, and the note id IS the payment hash
-      if (!notes.has(hash)) mintNote(hash, invoice.amountMsat)
+      // paying a mint invoice is what brings its note into existence. The
+      // preimage IS the note secret and the note id IS the payment hash,
+      // unless the wallet named an output hash of its own on the quote -
+      // then the note is credited there and the preimage is nobody's key.
+      const target = invoice.boundTo ?? hash
+      if (!notes.has(target)) mintNote(target, invoice.amountMsat)
+      if (invoice.boundTo) boundOutputs.delete(invoice.boundTo)
       return send({status: 'OK', settled: true})
     }
     if (url.pathname === '/_test/state') {
@@ -375,7 +448,13 @@ export const createMockMint = async (options = {}) => {
         metadata: JSON.stringify(metadata),
         withdrawLink:
           opts.withdrawLinkForm === 'plain' ? `${origin}/w` : `lnurlw://${req.headers.host}/w`,
-        disposable: false
+        disposable: false,
+        // "I accept an h on my pay callback". Every mint has a payRequest
+        // and the mint address document is experimental, so this is the
+        // one a wallet should decide from. Spread in last and only when
+        // the option is on, so a mock started with no options answers
+        // exactly what it always answered.
+        ...(mintToHashPlaces.has('payRequest') ? {mintToHash: true} : {})
       })
     }
 
@@ -420,6 +499,11 @@ export const createMockMint = async (options = {}) => {
         address.fees = {baseFeeMsat: opts.baseFeeMsat, feePpm: opts.feePpm}
       }
       if (previousPubkeys.length > 0) address.previousPubkeys = previousPubkeys
+      // The same fact the payRequest states, kept here for consistency
+      // with the other capability fields. Appended last, so a mock
+      // started with no options answers byte for byte what it answered
+      // before any of this existed.
+      if (mintToHashPlaces.has('mintAddress')) address.mintToHash = true
       return send(address)
     }
 
@@ -489,11 +573,58 @@ export const createMockMint = async (options = {}) => {
       }
       const net = applyFee(amount)
       if (net <= 0) return fail('Amount too small to mint a note.')
+
+      // ---- naming the note you are buying ----
+      //
+      // With mintToHash off this whole branch is skipped and `h` is not
+      // read at all, so the callback answers exactly what it answered
+      // before the option existed.
+      let boundTo = null
+      let echoBound = false
+      if (opts.mintToHash) {
+        // absent is not the same as empty: a wallet that sent `h=` meant
+        // to bind, and must not be handed an unbound quote in silence
+        const h = q.get('h')
+        if (h !== null) {
+          const wellFormed = /^[0-9a-f]{64}$/.test(h)
+          // Both refusals come BEFORE an invoice exists, which is the
+          // whole point: a wallet must never pay for a quote this mint
+          // was always going to reject.
+          if (!wellFormed && !opts.mintToHashAcceptsMalformedH) {
+            return fail('Invalid h.')
+          }
+          // An id already spoken for must never be minted over. Refused
+          // with the same reason a colliding output hash gets on the
+          // withdraw callback, so a probe learns nothing about which ids
+          // exist here.
+          if (outputIdInUse(h) && !opts.mintToHashAcceptsUsedH) {
+            return fail('Invalid or already spent k1.')
+          }
+          if (wellFormed) {
+            // The echo says "this quote is bound", so an honest mint
+            // sets it exactly when it did bind. mintToHashIgnoresH is the
+            // mint that says it and does not; leaving 'quote' out of
+            // mintToHashAdvertisedOn is the mint that does and does not say.
+            echoBound = mintToHashPlaces.has('quote')
+            if (!opts.mintToHashIgnoresH) boundTo = h
+          }
+        }
+      }
+
       const preimage = bytesToHex(randomBytes(32))
       const paymentHash = noteId(preimage)
-      invoices.set(paymentHash, {amountMsat: net, preimage, settled: false})
+      const invoice = {amountMsat: net, preimage, settled: false}
+      if (boundTo) {
+        invoice.boundTo = boundTo
+        boundOutputs.set(boundTo, paymentHash)
+      }
+      invoices.set(paymentHash, invoice)
       const body = {pr: fakeInvoice(amount, preimage), disposable: false}
       if (opts.verify) body.verify = `${origin}/verify/${paymentHash}`
+      // Appended last, and only when the quote really was bound, so a
+      // mock that was never told about any of this answers byte for byte
+      // what it always answered.
+      if (echoBound) body.mintToHash = true
       return send(body)
     }
 
@@ -511,7 +642,9 @@ export const createMockMint = async (options = {}) => {
         settled: invoice.settled,
         // the preimage IS the bearer secret here - a real SERVICE should
         // think hard before serving it, and a WALLET that receives one
-        // must rotate immediately
+        // must rotate immediately. The exception is a quote the wallet
+        // bound with its own h: that note is credited elsewhere, so the
+        // preimage is an ordinary payment proof and leaks nothing.
         preimage: invoice.settled || opts.verifyLeaksEarly ? invoice.preimage : null,
         pr: fakeInvoice(invoice.amountMsat, invoice.preimage)
       })
@@ -641,15 +774,16 @@ export const createMockMint = async (options = {}) => {
       if (!/^[0-9a-f]{64}$/.test(h)) return fail('missing h')
       if (h2 && !/^[0-9a-f]{64}$/.test(h2)) return fail('missing h2')
       // One id cannot carry two notes, and an id already in use - as a note
-      // in any state, or as a mint invoice's payment hash - must never be
-      // minted over: the invoice case points a future payer's money at a
-      // stranger's note (its /verify serves the preimage that IS the k1 of
-      // whatever sits under that id), and a burned note's id has a preimage
-      // every previous holder still knows. Refused with the same reason as
-      // any dead k1, so a probe learns nothing about which ids exist.
+      // in any state, as a mint invoice's payment hash, or as the output a
+      // bound quote is waiting to credit - must never be minted over: the
+      // invoice case points a future payer's money at a stranger's note
+      // (its /verify serves the preimage that IS the k1 of whatever sits
+      // under that id), and a burned note's id has a preimage every
+      // previous holder still knows. Refused with the same reason as any
+      // dead k1, so a probe learns nothing about which ids exist.
       if (h2 && h2 === h) return fail('Invalid or already spent k1.')
       for (const outputId of h2 ? [h, h2] : [h]) {
-        if (notes.has(outputId) || invoices.has(outputId)) {
+        if (outputIdInUse(outputId)) {
           return fail('Invalid or already spent k1.')
         }
       }

@@ -20,6 +20,7 @@
     "threat-suite.json",
     "payment-request.json",
     "settle-for-value.json",
-    "retried-mutation.json"
+    "retried-mutation.json",
+    "mint-to-hash.json"
   ]
 }

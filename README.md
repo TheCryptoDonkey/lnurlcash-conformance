@@ -97,10 +97,17 @@ must survive:
 | `--baseFeeMsat=N --feePpm=N` | advertises and withholds a mint fee |
 | `--roundFeeToSat` | rounds the withheld fee up to a whole sat — the note mints short of the formula |
 | `--verifyLeaksEarly` | serves the preimage from verify before settlement — the bearer secret, to anyone with the hash |
+| `--mintToHashAcceptsMalformedH` | claims `mintToHash` and invoices an `h` that is not 64 lowercase hex, so a wallet pays for a quote the mint will refuse |
+| `--mintToHashAcceptsUsedH` | claims it and invoices an `h` that already names a note, an invoice or another quote's output |
+| `--mintToHashIgnoresH` | claims it, echoes it back on the quote, and mints at the payment hash anyway, so the preimage is still the money |
+
+The three `mintToHash*` misbehaviours need `--mintToHash` alongside them;
+on their own they do nothing, because a mint that never offered the
+capability cannot misuse it.
 | `--verify=false` | no LUD-21 endpoint at all, not merely unadvertised |
 | `--withdrawLinkForm=lnurlw` | spells `withdrawLink` as `lnurlw://host/w` instead of the plain `https://host/w` the reference mint emits. Both are legal; a client has to take both |
 
-Four behaviours are outside LUD-25 and outside that table, because none
+Five behaviours are outside LUD-25 and outside that table, because none
 of them is misbehaviour. All are absent or off unless you ask
 for them, so a mock started with no options answers exactly what it always
 answered:
@@ -115,6 +122,8 @@ answered:
 | `--previousPrivateKey=<hex>` | an old signing key the mock still holds. Its public half joins `previousPubkeys` on its own |
 | `--signWithPreviousKey` | issues every note under that old key while still advertising the new one: the mid-rotation state a mint passes through when the advertisement moves before the signer |
 | `--retriedMutation=replay` | answers a byte-identical repeat of a mutation with the original success instead of `already spent`. The default, `refuse`, is what this mock has always done |
+| `--mintToHash` | takes an optional `h` on the pay callback and credits the minted note there, so the payment preimage is not the money. Off by default, and then `h` is not read at all |
+| `--mintToHashAdvertisedOn=quote` | narrows which of the three places claim it (`payRequest`, `mintAddress`, `quote`); all three by default. Changes only what is claimed, never what the mint does |
 
 As a library, for your own test suite:
 
@@ -147,8 +156,33 @@ everyone on the payment's route knows the payment hash), whether an
 unknown note is reported distinguishably from a spent one, and the
 experimental mint address.
 
-Three things a mint may publish are graded softly, because none of them is
-in LUD-25: the mint info on the discovery endpoint, a `/stats` endpoint
+One more is graded softly, and it is the one that changes what a bearer
+note is. In LUD-25 a minted note's `k1` is the payment preimage, so the
+preimage is the money, and every routing node on the payment path learns
+it, as does anyone who merely saw the invoice and polled LUD-21 verify with
+its payment hash. A QR on a desktop screen is exactly that. A mint may
+instead take an `h` on its pay callback, the sha256 of a secret the wallet
+chose, and credit the note there; the preimage is then an ordinary payment
+proof that opens nothing. The mint says so in three places, and they mean
+different things: `mintToHash: true` on the payRequest (every mint has one,
+so it is what a wallet decides from), the same on the experimental mint
+address document (corroboration), and the same echoed on the pay callback's
+own response when *that* quote was bound (the one that matters at the moment
+money moves, because the other two can be cached). Anything that is not
+exactly the boolean `true` is no.
+
+A mint that says nothing anywhere is reported as not offering it and passes,
+which is every mint today. A mint that claims it is asked to prove the
+refusals: a malformed `h` must get no invoice at all, since a wallet that
+pays for a quote the mint will reject has bought nothing. Where the three
+claims disagree, the grader names the disagreement rather than failing it:
+none of those loses anyone money on its own. What is failed is a mint that
+claims the capability and does not bind, because a wallet believing the
+claim stops rotating on sight; that one needs a settlement to see, so it
+rides on `--preimage`.
+
+Three other things a mint may publish are graded softly, because none of them
+is in LUD-25: the mint info on the discovery endpoint, a `/stats` endpoint
 stating what the mint owes against what its node holds, and the signing
 keys it has used before. Publishing none of them costs nothing. Publishing
 one in the wrong shape is a warning, not a failure, because a wallet will
@@ -173,7 +207,17 @@ npx lnurlcash-conform mint@example.com --note='lnurlw://...?k1=...' --paid=50000
 # or --pr=<the mint invoice>, when it carries an amount
 ```
 
-This is still read-only. The full run spends:
+The bound-mint check needs a payment too. Mint against a hash you chose
+yourself, then hand the runner your own secret and the preimage of the
+invoice you paid: the note must really be at your secret, and the preimage
+must open nothing.
+
+```bash
+npx lnurlcash-conform mint@example.com --note='lnurlw://...?k1=<your secret>' \
+  --preimage=<the preimage of the invoice you paid>
+```
+
+Both are still read-only. The full run spends:
 
 ```bash
 npx lnurlcash-conform mint@example.com --note='lnurlw://...?k1=...' --spend

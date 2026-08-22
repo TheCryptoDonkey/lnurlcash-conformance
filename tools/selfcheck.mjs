@@ -320,6 +320,144 @@ check('the retry set pins every way a request can differ', () => {
   )
 })
 
+// ---- naming the note you are buying ----
+//
+// Reimplemented rather than shared with the generator, for the same reason
+// the retry rules are: a self-check that calls the function it is checking
+// proves only that the function is deterministic.
+
+const mintToHash = load('mint-to-hash.json')
+
+check('every mint-to-hash case follows the declared rule', () => {
+  const inUse = Object.entries(mintToHash.idsAlreadyInUse)
+    .filter(([key]) => key !== 'why')
+    .map(([, id]) => id)
+  for (const c of mintToHash.cases) {
+    assert(
+      Object.keys(mintToHash.outcomes).includes(c.outcome),
+      `${c.name}: unknown outcome ${c.outcome}`
+    )
+    const expected =
+      c.h === null
+        ? 'unbound'
+        : !/^[0-9a-f]{64}$/.test(c.h)
+          ? 'malformed-h'
+          : inUse.includes(c.h)
+            ? 'collision'
+            : 'bound'
+    assert(expected === c.outcome, `${c.name}: the rule gives ${expected}, not ${c.outcome}`)
+    const refused = c.outcome === 'malformed-h' || c.outcome === 'collision'
+    assert(c.invoiced === !refused, `${c.name}: invoiced does not follow the outcome`)
+    // the pay callback's own response says whether THIS quote was bound,
+    // so it is true exactly when the note will land at h
+    assert(c.echo === (c.outcome === 'bound'), `${c.name}: the quote echo does not follow the outcome`)
+    if (refused) {
+      assert(c.noteId === null, `${c.name}: a refusal names a note id`)
+      const reason =
+        c.outcome === 'malformed-h' ? mintToHash.reasons.malformed : mintToHash.reasons.collision
+      assert(c.reason === reason, `${c.name}: reason was ${JSON.stringify(c.reason)}`)
+    } else {
+      assert(c.reason === null, `${c.name}: an issued quote carries a refusal reason`)
+      const landsAt = c.outcome === 'bound' ? c.h : mintToHash.settlement.paymentHash
+      assert(c.noteId === landsAt, `${c.name}: the note lands at ${c.noteId}`)
+    }
+  }
+})
+
+check('the mint-to-hash refusals are the two the wire fixes, and no more', () => {
+  const reasons = Object.values(mintToHash.reasons)
+  assert(reasons.length === 2, `${reasons.length} refusal reasons`)
+  assert(
+    mintToHash.reasons.collision === 'Invalid or already spent k1.',
+    'the collision reason is not the one the withdraw callback already uses, so a probe could tell the two apart'
+  )
+  const seen = new Set(mintToHash.cases.map(c => c.outcome))
+  for (const outcome of Object.keys(mintToHash.outcomes)) {
+    assert(seen.has(outcome), `no case covers the ${outcome} outcome`)
+  }
+  for (const [what, id] of Object.entries(mintToHash.idsAlreadyInUse)) {
+    if (what === 'why') continue
+    assert(
+      mintToHash.cases.some(c => c.h === id && c.outcome === 'collision'),
+      `no collision case for an id already in use as a ${what}`
+    )
+  }
+  assert(
+    mintToHash.cases.some(c => c.h === ''),
+    'nothing states what an empty h means, so a SERVICE is free to read it as absent'
+  )
+})
+
+check('the worked settlement recomputes from its own secrets', () => {
+  const s = mintToHash.settlement
+  assert(s.h === noteId(s.walletSecret), 'h is not the sha256 of the wallet secret')
+  assert(s.paymentHash === noteId(s.preimage), 'paymentHash is not the sha256 of the preimage')
+  assert(s.walletSecret !== s.preimage, 'the two secrets are the same value')
+  assert(s.bound.noteId === s.h, 'a bound note does not land at h')
+  assert(s.bound.k1 === s.walletSecret, 'a bound note is not opened by the wallet secret')
+  assert(s.bound.preimageIsAValidK1 === false, 'the preimage still opens a bound note')
+  assert(s.unbound.noteId === s.paymentHash, 'an unbound note does not land at the payment hash')
+  assert(s.unbound.k1 === s.preimage, 'an unbound note is not opened by the preimage')
+  assert(s.unbound.preimageIsAValidK1 === true, 'the preimage does not open an unbound note')
+})
+
+check('the capability is fixed in all three places, and only the boolean true means yes', () => {
+  const field = mintToHash.advertisement.field
+  const places = mintToHash.advertisement.places.map(p => p.where)
+  assert(
+    JSON.stringify(places) === JSON.stringify(['payRequest', 'mintAddress', 'quoteResponse']),
+    `the advertisement places are ${places.join(', ')}`
+  )
+  for (const p of mintToHash.advertisement.places) {
+    assert(typeof p.read === 'string' && p.read, `${p.where}: does not say where it is read from`)
+    assert(typeof p.means === 'string' && p.means, `${p.where}: does not say what it means`)
+    assert(
+      mintToHash.advertisements.some(c => c.where === p.where && c.offered),
+      `${p.where}: no case advertises the capability there`
+    )
+    assert(
+      mintToHash.advertisements.some(
+        c => c.where === p.where && c.body[field] === undefined && !c.offered
+      ),
+      `${p.where}: nothing states that an absent field means no`
+    )
+    assert(
+      mintToHash.advertisements.some(
+        c => c.where === p.where && typeof c.body[field] === 'string' && !c.offered
+      ),
+      `${p.where}: nothing states that a truthy non-boolean is not the capability`
+    )
+  }
+  for (const c of mintToHash.advertisements) {
+    assert(places.includes(c.where), `${c.name}: unknown place ${c.where}`)
+    assert(
+      c.offered === (c.body[field] === true),
+      `${c.where}/${c.name}: offered does not follow the field`
+    )
+  }
+  // the payRequest is the one every mint publishes, so it is the one a
+  // wallet decides from
+  const payRequest = mintToHash.advertisement.places.find(p => p.where === 'payRequest')
+  assert(/decide/.test(payRequest.why), 'the payRequest is not named as the one to decide from')
+  assert(
+    mintToHash.walletRules.some(r => /payRequest/.test(r)),
+    'no wallet rule sends a wallet to the payRequest'
+  )
+})
+
+check('every contradiction between the three carries a verdict', () => {
+  const verdicts = mintToHash.contradictions.map(c => c.verdict)
+  for (const c of mintToHash.contradictions) {
+    assert(typeof c.what === 'string' && c.what, `${c.name}: does not say what it is`)
+    assert(typeof c.why === 'string' && c.why.length > 40, `${c.name}: does not say why it matters`)
+  }
+  assert(verdicts.includes('broken'), 'nothing says that claiming it and not binding is broken')
+  assert(
+    verdicts.includes('not implemented'),
+    'nothing says that saying nothing anywhere is simply not implemented'
+  )
+})
+
 // ---- payment requests ----
 //
 // The rules are reimplemented here rather than shared with the generator:

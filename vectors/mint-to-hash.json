@@ -1,0 +1,409 @@
+{
+  "version": 1,
+  "spec": "LUD-06, LUD-21, LUD-25",
+  "description": "Naming the note you are buying. A WALLET MAY add `h` to the LUD-06 pay callback when minting: the sha256 of a secret it chose, 32 bytes as 64 lowercase hex, exactly what `h` means on the withdraw callback. The SERVICE then credits the minted note at that id on settlement, and the payment preimage is NOT a valid k1 for it. That is the whole point: in LUD-25 a minted note's k1 is the payment preimage, so the preimage is the money, and two sets of people learn it without being trusted with it - every routing node on the payment path, and anyone who merely saw the invoice and polled LUD-21 verify with its payment hash. Without `h` nothing changes and the preimage is still the secret, so this is purely additive: a SERVICE that has not implemented it is not broken, it simply does not offer the capability. This file fixes the parameter name, what counts as well-formed, and both refusal reasons, so implementations in different languages answer the same wallet the same way.",
+  "parameter": {
+    "name": "h",
+    "on": "the LUD-06 pay callback, alongside amount",
+    "value": "sha256 of a WALLET-chosen secret, 32 bytes as 64 lowercase hex",
+    "optional": true,
+    "absent": "today's behaviour, unchanged: the note is credited at the payment hash and its k1 is the payment preimage"
+  },
+  "advertisement": {
+    "field": "mintToHash",
+    "value": true,
+    "rule": "Anything that is not exactly the boolean true is false, in all three places. An absent field means no, and a mint without the feature says nothing anywhere.",
+    "places": [
+      {
+        "where": "payRequest",
+        "means": "I accept an `h` on my pay callback",
+        "read": "the LUD-06 payRequest at /.well-known/lnurlp/<user>",
+        "why": "the universal one. Every mint has a payRequest and the mint address document is experimental, so this is the one a wallet should decide from."
+      },
+      {
+        "where": "mintAddress",
+        "means": "the same fact, again",
+        "read": "the experimental mint address document at /.well-known/lnurlw/<user>",
+        "why": "corroboration, kept for consistency with the other capability fields published there. A mint that publishes no mint address document is not saying no."
+      },
+      {
+        "where": "quoteResponse",
+        "means": "I bound THIS quote to the hash you named",
+        "read": "the pay callback's own JSON response, alongside pr and verify",
+        "why": "per quote, and the one that matters at the moment money moves. A wallet reads it just before it parts with anything, and unlike the other two it cannot be cached or stale."
+      }
+    ],
+    "why": "A wallet has to know before it asks rather than after it pays. A SERVICE that does not advertise it MAY still be sent `h`, and will ignore it - so a wallet that assumed otherwise has paid for a note whose secret the SERVICE generated."
+  },
+  "reasons": {
+    "malformed": "Invalid h.",
+    "collision": "Invalid or already spent k1."
+  },
+  "outcomes": {
+    "bound": "an invoice is issued carrying `mintToHash: true`, and on settlement the note is credited at `h`. The payment preimage names nothing",
+    "unbound": "no `h` was sent: an invoice is issued and on settlement the note is credited at the payment hash, whose k1 is the payment preimage",
+    "malformed-h": "refused before any invoice exists, so a wallet never pays for a quote the SERVICE was always going to reject",
+    "collision": "refused before any invoice exists, with the same reason a colliding output hash gets on the withdraw callback, so a probe learns nothing about which ids exist"
+  },
+  "idsAlreadyInUse": {
+    "note": "e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e",
+    "invoicePaymentHash": "4bb06f8e4e3a7715d201d573d0aa423762e55dabd61a2c02278fa56cc6d294e0",
+    "pendingQuoteOutput": "2578ccf8645b2d1dc10c465eff843585970f3a7e22296a92cad55d489a272072",
+    "why": "An id already spoken for must never be minted over. A note's id has a preimage every previous holder knows; an invoice's payment hash points a future payer's money at a stranger's note, since its verify endpoint serves the preimage that IS the k1 of whatever sits under that id; and a second quote at an id another quote is already waiting to credit means whichever settles first takes it and the other payment lands nowhere."
+  },
+  "cases": [
+    {
+      "name": "no h at all",
+      "amountMsat": 21000,
+      "h": null,
+      "outcome": "unbound",
+      "invoiced": true,
+      "echo": false,
+      "noteId": "e802086ad6a1e16b78352ad7296d2aabd835b1b16dbe951e1135b97c68e29d81",
+      "reason": null,
+      "why": "the LUD-25 flow as it stands: nothing here is a change"
+    },
+    {
+      "name": "a well-formed h",
+      "amountMsat": 21000,
+      "h": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
+      "outcome": "bound",
+      "invoiced": true,
+      "echo": true,
+      "noteId": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
+      "reason": null
+    },
+    {
+      "name": "an h that is not hex",
+      "amountMsat": 21000,
+      "h": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+      "outcome": "malformed-h",
+      "invoiced": false,
+      "echo": false,
+      "noteId": null,
+      "reason": "Invalid h.",
+      "why": "the value is 32 bytes; a string that is not hex is not 32 bytes of anything"
+    },
+    {
+      "name": "an h one character short",
+      "amountMsat": 21000,
+      "h": "000000000000000000000000000000000000000000000000000000000000000",
+      "outcome": "malformed-h",
+      "invoiced": false,
+      "echo": false,
+      "noteId": null,
+      "reason": "Invalid h."
+    },
+    {
+      "name": "an h one character long",
+      "amountMsat": 21000,
+      "h": "00000000000000000000000000000000000000000000000000000000000000000",
+      "outcome": "malformed-h",
+      "invoiced": false,
+      "echo": false,
+      "noteId": null,
+      "reason": "Invalid h."
+    },
+    {
+      "name": "an empty h",
+      "amountMsat": 21000,
+      "h": "",
+      "outcome": "malformed-h",
+      "invoiced": false,
+      "echo": false,
+      "noteId": null,
+      "reason": "Invalid h.",
+      "why": "present and empty is not the same as absent. A wallet that sent `h=` meant to bind, and handing it an unbound quote in silence is how it pays for a note whose secret the SERVICE generated"
+    },
+    {
+      "name": "an h in upper case hex",
+      "amountMsat": 21000,
+      "h": "F849D67325FACF04177BC663B2DC544051831C589EF581D412F2EBA44834E77C",
+      "outcome": "malformed-h",
+      "invoiced": false,
+      "echo": false,
+      "noteId": null,
+      "reason": "Invalid h.",
+      "why": "the rule is byte-identical to the withdraw callback's own: 64 lowercase hex. A SERVICE that lowercases first is not losing anyone money, but a wallet that relies on it will meet one that does not"
+    },
+    {
+      "name": "an h that already names a note",
+      "amountMsat": 21000,
+      "h": "e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e",
+      "outcome": "collision",
+      "invoiced": false,
+      "echo": false,
+      "noteId": null,
+      "reason": "Invalid or already spent k1.",
+      "why": "every previous holder of that note knows the preimage of its id"
+    },
+    {
+      "name": "an h that already names an invoice this SERVICE issued",
+      "amountMsat": 21000,
+      "h": "4bb06f8e4e3a7715d201d573d0aa423762e55dabd61a2c02278fa56cc6d294e0",
+      "outcome": "collision",
+      "invoiced": false,
+      "echo": false,
+      "noteId": null,
+      "reason": "Invalid or already spent k1.",
+      "why": "that invoice's verify endpoint serves the preimage which IS the k1 of whatever sits under the id"
+    },
+    {
+      "name": "an h another quote is already waiting to credit",
+      "amountMsat": 21000,
+      "h": "2578ccf8645b2d1dc10c465eff843585970f3a7e22296a92cad55d489a272072",
+      "outcome": "collision",
+      "invoiced": false,
+      "echo": false,
+      "noteId": null,
+      "reason": "Invalid or already spent k1.",
+      "why": "two payments, one output id: whichever settles first takes it and the other payer has bought nothing"
+    }
+  ],
+  "settlement": {
+    "description": "One worked settlement, both ways round, so an implementation can check where the note landed rather than only that an invoice came back.",
+    "walletSecret": "0505050505050505050505050505050505050505050505050505050505050505",
+    "h": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
+    "preimage": "0606060606060606060606060606060606060606060606060606060606060606",
+    "paymentHash": "e802086ad6a1e16b78352ad7296d2aabd835b1b16dbe951e1135b97c68e29d81",
+    "bound": {
+      "noteId": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
+      "k1": "0505050505050505050505050505050505050505050505050505050505050505",
+      "preimageIsAValidK1": false,
+      "note": "the wallet can claim by asking the withdraw endpoint for its own secret directly - it never needs the verify poll at all"
+    },
+    "unbound": {
+      "noteId": "e802086ad6a1e16b78352ad7296d2aabd835b1b16dbe951e1135b97c68e29d81",
+      "k1": "0606060606060606060606060606060606060606060606060606060606060606",
+      "preimageIsAValidK1": true,
+      "note": "the wallet must poll verify for the preimage, and rotate the instant it has it"
+    }
+  },
+  "advertisements": [
+    {
+      "name": "advertised",
+      "where": "payRequest",
+      "body": {
+        "tag": "payRequest",
+        "callback": "https://mint.example/p/cb",
+        "minSendable": 1000,
+        "maxSendable": 100000000,
+        "metadata": "[[\"text/plain\",\"a mint\"]]",
+        "withdrawLink": "https://mint.example/w",
+        "mintToHash": true
+      },
+      "offered": true
+    },
+    {
+      "name": "absent",
+      "where": "payRequest",
+      "body": {
+        "tag": "payRequest",
+        "callback": "https://mint.example/p/cb",
+        "minSendable": 1000,
+        "maxSendable": 100000000,
+        "metadata": "[[\"text/plain\",\"a mint\"]]",
+        "withdrawLink": "https://mint.example/w"
+      },
+      "offered": false,
+      "why": "the ordinary case, and not a defect: absence means no, and a mint without the feature says nothing anywhere"
+    },
+    {
+      "name": "the boolean false",
+      "where": "payRequest",
+      "body": {
+        "tag": "payRequest",
+        "callback": "https://mint.example/p/cb",
+        "minSendable": 1000,
+        "maxSendable": 100000000,
+        "metadata": "[[\"text/plain\",\"a mint\"]]",
+        "withdrawLink": "https://mint.example/w",
+        "mintToHash": false
+      },
+      "offered": false
+    },
+    {
+      "name": "the string \"true\"",
+      "where": "payRequest",
+      "body": {
+        "tag": "payRequest",
+        "callback": "https://mint.example/p/cb",
+        "minSendable": 1000,
+        "maxSendable": 100000000,
+        "metadata": "[[\"text/plain\",\"a mint\"]]",
+        "withdrawLink": "https://mint.example/w",
+        "mintToHash": "true"
+      },
+      "offered": false,
+      "why": "only the boolean true is the capability. A wallet that accepts the string will pay a mint that never implemented it"
+    },
+    {
+      "name": "the number 1",
+      "where": "payRequest",
+      "body": {
+        "tag": "payRequest",
+        "callback": "https://mint.example/p/cb",
+        "minSendable": 1000,
+        "maxSendable": 100000000,
+        "metadata": "[[\"text/plain\",\"a mint\"]]",
+        "withdrawLink": "https://mint.example/w",
+        "mintToHash": 1
+      },
+      "offered": false
+    },
+    {
+      "name": "advertised",
+      "where": "mintAddress",
+      "body": {
+        "tag": "withdrawRequest",
+        "callback": "https://mint.example/w",
+        "minWithdrawable": 1000,
+        "maxWithdrawable": 100000000,
+        "payLink": "https://mint.example/.well-known/lnurlp/mint",
+        "mintPubkey": "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa",
+        "mintToHash": true
+      },
+      "offered": true
+    },
+    {
+      "name": "absent",
+      "where": "mintAddress",
+      "body": {
+        "tag": "withdrawRequest",
+        "callback": "https://mint.example/w",
+        "minWithdrawable": 1000,
+        "maxWithdrawable": 100000000,
+        "payLink": "https://mint.example/.well-known/lnurlp/mint",
+        "mintPubkey": "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa"
+      },
+      "offered": false,
+      "why": "the ordinary case, and not a defect: absence means no, and a mint without the feature says nothing anywhere"
+    },
+    {
+      "name": "the boolean false",
+      "where": "mintAddress",
+      "body": {
+        "tag": "withdrawRequest",
+        "callback": "https://mint.example/w",
+        "minWithdrawable": 1000,
+        "maxWithdrawable": 100000000,
+        "payLink": "https://mint.example/.well-known/lnurlp/mint",
+        "mintPubkey": "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa",
+        "mintToHash": false
+      },
+      "offered": false
+    },
+    {
+      "name": "the string \"true\"",
+      "where": "mintAddress",
+      "body": {
+        "tag": "withdrawRequest",
+        "callback": "https://mint.example/w",
+        "minWithdrawable": 1000,
+        "maxWithdrawable": 100000000,
+        "payLink": "https://mint.example/.well-known/lnurlp/mint",
+        "mintPubkey": "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa",
+        "mintToHash": "true"
+      },
+      "offered": false,
+      "why": "only the boolean true is the capability. A wallet that accepts the string will pay a mint that never implemented it"
+    },
+    {
+      "name": "the number 1",
+      "where": "mintAddress",
+      "body": {
+        "tag": "withdrawRequest",
+        "callback": "https://mint.example/w",
+        "minWithdrawable": 1000,
+        "maxWithdrawable": 100000000,
+        "payLink": "https://mint.example/.well-known/lnurlp/mint",
+        "mintPubkey": "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa",
+        "mintToHash": 1
+      },
+      "offered": false
+    },
+    {
+      "name": "advertised",
+      "where": "quoteResponse",
+      "body": {
+        "pr": "lnbc210n1pjqrstuvwxyz",
+        "verify": "https://mint.example/verify/e802086ad6a1e16b78352ad7296d2aabd835b1b16dbe951e1135b97c68e29d81",
+        "disposable": false,
+        "mintToHash": true
+      },
+      "offered": true
+    },
+    {
+      "name": "absent",
+      "where": "quoteResponse",
+      "body": {
+        "pr": "lnbc210n1pjqrstuvwxyz",
+        "verify": "https://mint.example/verify/e802086ad6a1e16b78352ad7296d2aabd835b1b16dbe951e1135b97c68e29d81",
+        "disposable": false
+      },
+      "offered": false,
+      "why": "the ordinary case, and not a defect: absence means no, and a mint without the feature says nothing anywhere"
+    },
+    {
+      "name": "the boolean false",
+      "where": "quoteResponse",
+      "body": {
+        "pr": "lnbc210n1pjqrstuvwxyz",
+        "verify": "https://mint.example/verify/e802086ad6a1e16b78352ad7296d2aabd835b1b16dbe951e1135b97c68e29d81",
+        "disposable": false,
+        "mintToHash": false
+      },
+      "offered": false
+    },
+    {
+      "name": "the string \"true\"",
+      "where": "quoteResponse",
+      "body": {
+        "pr": "lnbc210n1pjqrstuvwxyz",
+        "verify": "https://mint.example/verify/e802086ad6a1e16b78352ad7296d2aabd835b1b16dbe951e1135b97c68e29d81",
+        "disposable": false,
+        "mintToHash": "true"
+      },
+      "offered": false,
+      "why": "only the boolean true is the capability. A wallet that accepts the string will pay a mint that never implemented it"
+    },
+    {
+      "name": "the number 1",
+      "where": "quoteResponse",
+      "body": {
+        "pr": "lnbc210n1pjqrstuvwxyz",
+        "verify": "https://mint.example/verify/e802086ad6a1e16b78352ad7296d2aabd835b1b16dbe951e1135b97c68e29d81",
+        "disposable": false,
+        "mintToHash": 1
+      },
+      "offered": false
+    }
+  ],
+  "contradictions": [
+    {
+      "name": "claims the capability and does not bind",
+      "what": "any of the three says `mintToHash: true`, and the minted note is still opened by the payment preimage",
+      "verdict": "broken",
+      "why": "the wallet was told it need not race the preimage, so it did not. The quote echo is the worst version of it, because the wallet was told at the very moment it decided to pay."
+    },
+    {
+      "name": "binds and says nothing on the quote",
+      "what": "the payRequest advertises it, the quote carries `h`, and the response omits `mintToHash`",
+      "verdict": "safe but unconfirmable",
+      "why": "a wallet reading a missing field as false falls back to the preimage flow, which is safe. It simply cannot confirm at the one moment confirmation is worth anything."
+    },
+    {
+      "name": "says nothing anywhere and ignores `h`",
+      "what": "no advertisement, no echo, and the note is the preimage's",
+      "verdict": "not implemented",
+      "why": "every mint today. Nothing about this is a defect."
+    }
+  ],
+  "walletRules": [
+    "A WALLET MUST persist its chosen secret BEFORE asking for the invoice. Paying and then losing the secret is the one way this makes things worse than the preimage scheme, and persisting first removes it.",
+    "A WALLET MUST decide from the payRequest, which every SERVICE publishes, rather than from the experimental mint address document, which many do not. A SERVICE that does not advertise `mintToHash` ignores `h`, and the note it mints is the preimage's.",
+    "A WALLET MUST check the pay callback's own `mintToHash` before it pays. The other two advertisements can be cached or stale; that one is this quote, now. Absent means not bound, so claim the preimage way and rotate on sight.",
+    "Against a SERVICE that does advertise it, a WALLET needs no verify poll to claim: it knows its own secret, so it asks the withdraw endpoint for it directly. Keep the poll as the fallback for SERVICEs without the capability.",
+    "A note minted at a WALLET-chosen hash is the WALLET's from birth. A wallet deriving its secrets from a seed can restore that note from the seed alone, which a preimage-secret note can never be."
+  ]
+}

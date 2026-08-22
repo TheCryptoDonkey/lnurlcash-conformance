@@ -6,6 +6,75 @@ exact version if you gate CI on the grade.
 
 ## 0.2.0 - unreleased
 
+- Naming the note you are buying. In LUD-25 a minted note's `k1` is the
+  payment preimage, so the preimage IS the money, and two sets of people
+  learn it without being trusted with it: every routing node on the
+  payment path, because that is how HTLC settlement works, and anyone who
+  merely saw the invoice, because they can poll LUD-21 verify with its
+  payment hash and take the preimage the moment it settles. A QR on a
+  desktop screen is exactly that. "Rotate immediately" is the only defence
+  and it is a race. A wallet may instead send `h` on the LUD-06 pay
+  callback, the sha256 of a secret it chose, and be credited there.
+
+  - New `vectors/mint-to-hash.json` fixes the parameter and both refusal
+    reasons, so kits in other languages answer the same wallet the same
+    way. `h` is 64 lowercase hex, exactly what it means on the withdraw
+    callback. A malformed one is refused with `Invalid h.` before any
+    invoice exists, so a wallet never pays for a quote the mint was always
+    going to reject; one that already names a note, an invoice, or another
+    quote's output is refused with `Invalid or already spent k1.`, the
+    same reason the withdraw callback gives a colliding output hash, so no
+    oracle appears. Ten cases, four of them refusals, plus a worked
+    settlement both ways round: bound, the note is at the wallet's own
+    secret and the preimage opens nothing; unbound, it is the preimage's,
+    exactly as before.
+
+  - Support is advertised in three places and they say different things.
+    `mintToHash: true` on the payRequest means "I accept an `h` on my pay
+    callback", and since every mint publishes a payRequest while the mint
+    address document is experimental, that is the one a wallet decides
+    from. The mint address document repeats it, as corroboration. The pay
+    callback's own response echoes it when *that* quote was bound, which
+    is the one that matters at the moment money moves, because the other
+    two can be cached or stale. Anything that is not exactly the boolean
+    `true` is no, everywhere, so a mint that omits the field is safely
+    read as not bound. All fifteen spellings are in the vector.
+
+  - Mock knob `mintToHash`, off by default, and with it off nothing about
+    this reaches the wire: nothing is advertised anywhere and the pay
+    callback does not read `h` at all. `mintToHashAdvertisedOn` narrows
+    which of the three places claim it, changing only what is claimed and
+    never what the mint does, so a mint that shipped the feature before
+    the advertisement can be reproduced. Three misbehaviours, each needing
+    `mintToHash` alongside: `mintToHashAcceptsMalformedH`,
+    `mintToHashAcceptsUsedH` and `mintToHashIgnoresH`, the last of which
+    claims the capability, echoes it on the quote, and mints at the
+    payment hash anyway.
+
+  - New grader check `accepts an output hash on the mint quote
+    (mintToHash, optional)`. Soft where it should be: a mint that says
+    nothing anywhere and ignores `h` is reported as not offering it and
+    the run passes, which is every mint today and not a defect. A mint
+    that claims it is asked to prove the refusals, and an invoice issued
+    for a malformed `h` fails, because a wallet that pays for a quote the
+    mint will reject has bought nothing while the mint keeps the sats.
+    Disagreements between the three claims are named rather than failed:
+    none of them loses anyone money on its own, since a wallet reading a
+    missing field as false falls back to the preimage flow.
+
+  - New grader check `a bound mint credits the hash the wallet named
+    (optional)`, exported as `gradeBoundMint` and wired to a new
+    `--preimage` flag. Like the minted-value check it needs a payment the
+    runner cannot make itself: given the note URL carrying the wallet's
+    own secret and the preimage of the invoice that funded it, it fails a
+    mint that claimed the capability and did not bind. That is the one
+    worth failing rather than warning, because a wallet that believed the
+    claim stopped rotating on sight.
+
+  - Also refused now, on the withdraw callback: an `h` or `h2` colliding
+    with the output a bound quote is waiting to credit. Unreachable unless
+    `mintToHash` is on, so nothing about a mint without it changes.
+
 - New `vectors/derivation.json`: deterministic note secrets from a BIP39
   seed, so that a wallet can be restored from words alone and two
   implementations of the same wallet derive the same notes.

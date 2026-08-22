@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import {
   createReport,
+  gradeBoundMint,
   gradeMint,
   gradeMintedValue,
   gradeNote,
@@ -16,6 +17,7 @@ const value = name => args.find(a => a.startsWith(`--${name}=`))?.slice(name.len
 const noteArg = value('note')
 const paidArg = value('paid')
 const prArg = value('pr')
+const preimageArg = value('preimage')
 
 if (positional.length === 0 && !noteArg) {
   console.error(`lnurlcash-conform - grade an LNURLcash service against LUD-25
@@ -23,6 +25,7 @@ if (positional.length === 0 && !noteArg) {
   lnurlcash-conform <mint>                          read-only checks
   lnurlcash-conform <mint> --note=<url> --paid=<msat>   + the minted-value check
   lnurlcash-conform <mint> --note=<url> --pr=<invoice>  same, paid amount from the invoice
+  lnurlcash-conform <mint> --note=<url> --preimage=<hex> + the bound-mint checks
   lnurlcash-conform <mint> --note=<url> --spend         + the full mutating checks
 
 <mint> may be a Lightning Address (mint@example.com), a bare domain, or a
@@ -31,6 +34,11 @@ payRequest URL.
 --paid/--pr name what the note's mint invoice was paid at, and require the
 note to be freshly minted and never rotated: the check compares its value
 against the LUD-25 fee formula. It is read-only.
+
+--preimage names the payment preimage of the invoice that minted the note,
+for a mint advertising mintToHash and a note minted against a hash you chose
+yourself: --note then carries YOUR secret, and the check confirms the note is
+really there and that the preimage opens nothing. Also read-only.
 
 The --spend checks SPEND: they burn the note given and leave its value in a
 fresh note printed at the end. Use a small note, and pass --spend to
@@ -63,6 +71,13 @@ if (paidArg !== undefined) {
 
 if (noteArg && paidMsat !== null) {
   await gradeMintedValue(noteArg, report, {mintFee, paidMsat})
+}
+
+if (noteArg && preimageArg !== undefined) {
+  await gradeBoundMint(noteArg, report, {
+    preimage: preimageArg,
+    payCallback: typeof pay?.callback === 'string' ? pay.callback : null
+  })
 }
 
 let finished
