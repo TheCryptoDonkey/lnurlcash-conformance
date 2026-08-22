@@ -525,9 +525,13 @@ export const gradeMint = async (payUrl, report) => {
 
     // A malformed h must be refused BEFORE an invoice exists. A wallet
     // that pays a quote the mint was always going to reject has bought
-    // nothing, and the mint keeps the sats. Upper-case hex is not probed:
-    // the wire is 64 lowercase hex, but a mint that lowercases first is
-    // not losing anyone money and grading it would be picking a fight.
+    // nothing, and the mint keeps the sats.
+    //
+    // Malformed means not 32 bytes of hex, in any casing. Upper case is a
+    // spelling, not a defect, and it is deliberately not probed: a WALLET
+    // MUST send lowercase and every client here does, a SERVICE SHOULD
+    // normalise before comparing, and one that refuses upper case outright
+    // is strict rather than wrong - the wallet learns before it pays.
     for (const [what, value] of [
       ['not hex', 'z'.repeat(64)],
       ['a character short', '0'.repeat(63)],

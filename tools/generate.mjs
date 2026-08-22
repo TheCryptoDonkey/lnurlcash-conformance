@@ -1756,24 +1756,35 @@ const MTH_REASONS = {
   collision: 'Invalid or already spent k1.'
 }
 
+// Hex is case-insensitive, so an `h` is well formed on its bytes and the
+// SERVICE compares the lowercase form. The producer rule stays strict -
+// a WALLET sends lowercase - but a SERVICE that keys the string it was
+// handed would file the note under the upper-case spelling and never find
+// it again when the wallet asks for its own lowercase secret.
+const mthWellFormed = h => typeof h === 'string' && /^[0-9a-f]{64}$/i.test(h)
+const mthComparedAs = h => (mthWellFormed(h) ? h.toLowerCase() : null)
+
 const mintToHashOutcome = h => {
   if (h === null) return 'unbound'
-  if (!/^[0-9a-f]{64}$/.test(h)) return 'malformed-h'
-  if (MTH_IN_USE.includes(h)) return 'collision'
+  if (!mthWellFormed(h)) return 'malformed-h'
+  if (MTH_IN_USE.includes(mthComparedAs(h))) return 'collision'
   return 'bound'
 }
 
 const mintToHashCase = (name, h, why) => {
   const outcome = mintToHashOutcome(h)
+  const comparedAs = mthComparedAs(h)
   return {
     name,
     amountMsat: 21000,
     h,
+    // what the SERVICE compares and keys by: the same 32 bytes, lowercase
+    comparedAs,
     outcome,
     invoiced: outcome === 'bound' || outcome === 'unbound',
     // the pay callback's own response says whether THIS quote was bound
     echo: outcome === 'bound',
-    noteId: outcome === 'bound' ? h : outcome === 'unbound' ? MTH_PAYMENT_HASH : null,
+    noteId: outcome === 'bound' ? comparedAs : outcome === 'unbound' ? MTH_PAYMENT_HASH : null,
     reason:
       outcome === 'malformed-h'
         ? MTH_REASONS.malformed
@@ -1858,6 +1869,16 @@ const mintToHash = {
     optional: true,
     absent: 'today\'s behaviour, unchanged: the note is credited at the payment hash and its k1 is the payment preimage'
   },
+  caseRule: {
+    wallet:
+      'A WALLET MUST send `h` as 64 lowercase hex. Strict on the producer side costs nothing and is what every implementation here does.',
+    service:
+      'A SERVICE SHOULD normalise case before comparing, and MUST NOT treat an otherwise well-formed upper-case `h` as a different output from its lowercase form. Hex is case-insensitive: both spellings are the same 32 bytes, so they name one output, not two.',
+    whyItMatters:
+      'A SERVICE that keys the string it was handed files the note under the upper-case spelling, and then cannot find it when the wallet asks the withdraw endpoint for its own lowercase secret. The money is not stolen, it is simply lost, and nobody is told. A SERVICE that instead refuses an upper-case `h` outright is being strict rather than wrong, and loses nobody anything - the wallet learns before it pays.',
+    comparedAs:
+      'Every case below carries `comparedAs`: the value a SERVICE compares and keys by, which is `h` lowercased, or null when `h` is absent or malformed.'
+  },
   advertisement: {
     field: 'mintToHash',
     value: true,
@@ -1887,11 +1908,11 @@ const mintToHash = {
   reasons: MTH_REASONS,
   outcomes: {
     bound:
-      'an invoice is issued carrying `mintToHash: true`, and on settlement the note is credited at `h`. The payment preimage names nothing',
+      'an invoice is issued carrying `mintToHash: true`, and on settlement the note is credited at `comparedAs` - `h` lowercased, which for a WALLET following the rule is `h` itself. The payment preimage names nothing',
     unbound:
       'no `h` was sent: an invoice is issued and on settlement the note is credited at the payment hash, whose k1 is the payment preimage',
     'malformed-h':
-      'refused before any invoice exists, so a wallet never pays for a quote the SERVICE was always going to reject',
+      'not 32 bytes of hex in any casing: refused before any invoice exists, so a wallet never pays for a quote the SERVICE was always going to reject',
     collision:
       'refused before any invoice exists, with the same reason a colliding output hash gets on the withdraw callback, so a probe learns nothing about which ids exist'
   },
@@ -1919,12 +1940,17 @@ const mintToHash = {
     mintToHashCase(
       'an h in upper case hex',
       MTH_H.toUpperCase(),
-      'the rule is byte-identical to the withdraw callback\'s own: 64 lowercase hex. A SERVICE that lowercases first is not losing anyone money, but a wallet that relies on it will meet one that does not'
+      'the same 32 bytes as the lowercase case above, so it names the same output and lands at the same id. A WALLET still MUST send lowercase; a SERVICE that keys the upper-case string instead has filed the note where the wallet will never look for it'
     ),
     mintToHashCase(
       'an h that already names a note',
       MTH_NOTE_ID,
       'every previous holder of that note knows the preimage of its id'
+    ),
+    mintToHashCase(
+      'an h in upper case hex that already names a note',
+      MTH_NOTE_ID.toUpperCase(),
+      'case is normalised BEFORE the collision check, or an upper-case spelling walks straight past it and mints over a live note'
     ),
     mintToHashCase(
       'an h that already names an invoice this SERVICE issued',
@@ -1957,6 +1983,16 @@ const mintToHash = {
       note: 'the wallet must poll verify for the preimage, and rotate the instant it has it'
     }
   },
+  normalisation: {
+    description:
+      'One worked pair, so an implementation can check that the two spellings name one output rather than two.',
+    sent: MTH_H.toUpperCase(),
+    comparedAs: MTH_H,
+    outputId: MTH_H,
+    sameOutputAs: MTH_H,
+    walletSecret: MTH_SECRET,
+    note: 'A quote sent with the upper-case spelling settles into a note the wallet opens with its own secret, exactly as the lowercase spelling does. Two spellings, 32 bytes, one output.'
+  },
   advertisements: [
     ...advertisementCases('payRequest'),
     ...advertisementCases('mintAddress'),
@@ -1984,6 +2020,7 @@ const mintToHash = {
   ],
   walletRules: [
     'A WALLET MUST persist its chosen secret BEFORE asking for the invoice. Paying and then losing the secret is the one way this makes things worse than the preimage scheme, and persisting first removes it.',
+    'A WALLET MUST send `h` as 64 lowercase hex. A SERVICE SHOULD normalise case before comparing and MUST NOT read the two spellings as two outputs, but a wallet that leans on that will meet a SERVICE that refuses upper case outright.',
     'A WALLET MUST decide from the payRequest, which every SERVICE publishes, rather than from the experimental mint address document, which many do not. A SERVICE that does not advertise `mintToHash` ignores `h`, and the note it mints is the preimage\'s.',
     'A WALLET MUST check the pay callback\'s own `mintToHash` before it pays. The other two advertisements can be cached or stale; that one is this quote, now. Absent means not bound, so claim the preimage way and rotate on sight.',
     'Against a SERVICE that does advertise it, a WALLET needs no verify poll to claim: it knows its own secret, so it asks the withdraw endpoint for it directly. Keep the poll as the fallback for SERVICEs without the capability.',

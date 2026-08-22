@@ -75,6 +75,25 @@ exact version if you gate CI on the grade.
     with the output a bound quote is waiting to credit. Unreachable unless
     `mintToHash` is on, so nothing about a mint without it changes.
 
+  - The case rule, stated as a rule rather than a verdict. Hex is
+    case-insensitive, so `AAAA...` and `aaaa...` are the same 32 bytes and
+    name one output, not two. A wallet MUST send `h` as 64 lowercase hex,
+    which keeps the producer side strict and is what every client here
+    does. A service SHOULD normalise case before comparing, and MUST NOT
+    treat an otherwise well-formed upper-case `h` as a different output
+    from its lowercase form: keying the string it was handed files the
+    note under the upper-case spelling and never finds it again when the
+    wallet asks the withdraw endpoint for its own lowercase secret, and
+    nobody is told. The vector says so with a worked pair and with two
+    upper-case cases, one binding where its lowercase twin binds and one
+    colliding where its twin collides, which is also what pins case being
+    normalised *before* the collision check. Every genuinely malformed
+    case is unchanged: empty, not hex, and both off-by-one lengths. The
+    mock normalises. The grader does not probe it in either direction: a
+    mint that normalises loses nobody money, and one that refuses upper
+    case outright is being strict rather than wrong, because the wallet
+    learns before it pays.
+
 - New `vectors/derivation.json`: deterministic note secrets from a BIP39
   seed, so that a wallet can be restored from words alone and two
   implementations of the same wallet derive the same notes.

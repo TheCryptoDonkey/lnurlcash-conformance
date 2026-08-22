@@ -584,9 +584,17 @@ export const createMockMint = async (options = {}) => {
       if (opts.mintToHash) {
         // absent is not the same as empty: a wallet that sent `h=` meant
         // to bind, and must not be handed an unbound quote in silence
-        const h = q.get('h')
-        if (h !== null) {
-          const wellFormed = /^[0-9a-f]{64}$/.test(h)
+        const sent = q.get('h')
+        if (sent !== null) {
+          // Hex is case-insensitive, so both spellings are the same 32
+          // bytes and name one output, not two. A WALLET must send
+          // lowercase; a SERVICE that keyed the string it was handed
+          // would file the note under the upper-case spelling and never
+          // find it when the wallet asked the withdraw endpoint for its
+          // own lowercase secret. Normalised here, before the collision
+          // check, or an upper-case spelling walks straight past it.
+          const wellFormed = /^[0-9a-f]{64}$/i.test(sent)
+          const h = wellFormed ? sent.toLowerCase() : sent
           // Both refusals come BEFORE an invoice exists, which is the
           // whole point: a wallet must never pay for a quote this mint
           // was always going to reject.
