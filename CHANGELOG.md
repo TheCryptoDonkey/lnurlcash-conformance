@@ -4,6 +4,16 @@ Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may add or tighten checks that a previously-passing mint now fails; pin an
 exact version if you gate CI on the grade.
 
+## 0.2.1 - 2026-08-22
+
+- The grader ships its own TypeScript declarations. The mock mint had them
+  and the runner did not, so a TypeScript consumer hand-wrote a
+  `declare module` shim, and those drift: moneyer carried one, `gradeBoundMint`
+  landed here, and the shim did not know about it. A consumer could not call
+  the newest check without editing a copy of a declaration it does not own.
+  Now `runner/index.d.ts` sits next to the code it describes and the exports
+  map points at it. No runtime change of any kind.
+
 ## 0.2.0 - 2026-08-22
 
 - Naming the note you are buying. In LUD-25 a minted note's `k1` is the
