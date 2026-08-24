@@ -4,6 +4,21 @@ Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may add or tighten checks that a previously-passing mint now fails; pin an
 exact version if you gate CI on the grade.
 
+## 0.3.0 - 2026-08-24
+
+- Add an optional bound-mint settlement receipt for sealed signers. A
+  receipt-capable quote commits to `mint: {h, amount}` before payment; its
+  settled LUD-21 response repeats the invoice, output and exact net value and
+  adds the ordinary LUD-25 note signature. Absence remains compatible with
+  the current preimage-and-rotate flow.
+- `vectors/mint-to-hash.json` now carries the valid quote, unsettled and
+  settled shapes plus wrong-output, wrong-amount, premature-signature and
+  invalid-signature cases. `docs/BOUND-MINT-RECEIPTS.md` contains candidate
+  normative LUD-25 text and the compatibility matrix.
+- The mock mint gains `mintReceipt`; when enabled it publishes the
+  verification key before payment, commits the quote and signs only after
+  settlement. Self-check and self-grade verify the complete lifecycle.
+
 ## 0.2.3 - 2026-08-22
 
 - **New check: `keeps signatures off the informational endpoint`.** LUD-25
