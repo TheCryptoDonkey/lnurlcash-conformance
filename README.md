@@ -60,12 +60,16 @@ for (const c of cases) {
 | `payment-request.json` | `lnurlcashreq1`: one holder asking another for value |
 | `settle-for-value.json` | the decision table a server works through to take a note as payment |
 | `retried-mutation.json` | what makes a repeated mutation a retry rather than a double-spend |
+| `mint-to-hash.json` | wallet-chosen mint outputs and optional bound LUD-21 receipts |
 | `lifecycle.json` | behavioural requirements, as scenarios to drive |
 | `threat-suite.json` | the transport/exposure scorecard — candidate spec options against fixed attacks (non-normative) |
 
 Regenerate with `npm run generate`; check them with `npm test`, which
 verifies every digest recomputes, every declared signature really does
 verify, and every fee expectation follows from the formula.
+
+The upstreamable wire text and compatibility matrix for the optional receipt
+are in [`docs/BOUND-MINT-RECEIPTS.md`](docs/BOUND-MINT-RECEIPTS.md).
 
 ## The mock mint
 
@@ -123,6 +127,7 @@ answered:
 | `--signWithPreviousKey` | issues every note under that old key while still advertising the new one: the mid-rotation state a mint passes through when the advertisement moves before the signer |
 | `--retriedMutation=replay` | answers a byte-identical repeat of a mutation with the original success instead of `already spent`. The default, `refuse`, is what this mock has always done |
 | `--mintToHash` | takes an optional `h` on the pay callback and credits the minted note there, so the payment preimage is not the money. Off by default, and then `h` is not read at all |
+| `--mintReceipt` | with `--mintToHash`, adds the optional quote commitment and signed LUD-21 settlement receipt |
 | `--mintToHashAdvertisedOn=quote` | narrows which of the three places claim it (`payRequest`, `mintAddress`, `quote`); all three by default. Changes only what is claimed, never what the mint does |
 
 As a library, for your own test suite:

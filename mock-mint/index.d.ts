@@ -158,6 +158,12 @@ export interface MockMintOptions {
    */
   mintToHash?: boolean
   /**
+   * Emit the optional mint:{h,amount} quote commitment and add the normal
+   * note signature on settled LUD-21 verification. Requires mintToHash,
+   * verify and signatures. Off by default for baseline compatibility.
+   */
+  mintReceipt?: boolean
+  /**
    * non-compliant, and only reachable with mintToHash on: issue an
    * invoice for an `h` that is not 64 lowercase hex, so a wallet pays for
    * a quote this mint was always going to refuse.
@@ -220,6 +226,8 @@ export interface MockMintState {
       settled: boolean
       /** the output id this quote was bound to, when the wallet named one */
       boundTo?: string
+      /** the exact invoice returned on the quote, for LUD-21 binding */
+      pr?: string
     }
   >
   pubkey: string

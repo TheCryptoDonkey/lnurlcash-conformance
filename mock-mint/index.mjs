@@ -187,6 +187,10 @@ const DEFAULTS = {
   // which is the one that matters at the moment money moves: the other
   // two can be cached or stale.
   mintToHash: false,
+  // Add the optional bound LUD-21 receipt to an honestly bound quote and
+  // its verify response. Requires mintToHash, verify and signatures; off
+  // by default so the baseline mock remains the current LUD-25 wire.
+  mintReceipt: false,
   // non-compliant, and only reachable with mintToHash on: issue an
   // invoice for an `h` that is not 64 lowercase hex, so a wallet pays for
   // a quote this mint was always going to refuse
@@ -461,7 +465,14 @@ export const createMockMint = async (options = {}) => {
         // one a wallet should decide from. Spread in last and only when
         // the option is on, so a mock started with no options answers
         // exactly what it always answered.
-        ...(mintToHashPlaces.has('payRequest') ? {mintToHash: true} : {})
+        ...(mintToHashPlaces.has('payRequest') ? {mintToHash: true} : {}),
+        // A receipt verifier needs the signing key before payment. The
+        // baseline mock remains byte-for-byte unchanged when receipts are
+        // off; a real node-key signer can alternatively be recovered from
+        // the BOLT-11 invoice itself.
+        ...(opts.mintReceipt && opts.verify && opts.signatures
+          ? {mintPubkey: pubkey}
+          : {})
       })
     }
 
@@ -628,18 +639,28 @@ export const createMockMint = async (options = {}) => {
 
       const preimage = bytesToHex(randomBytes(32))
       const paymentHash = noteId(preimage)
-      const invoice = {amountMsat: net, preimage, settled: false}
+      const pr = fakeInvoice(amount, preimage)
+      const invoice = {amountMsat: net, preimage, settled: false, pr}
       if (boundTo) {
         invoice.boundTo = boundTo
         boundOutputs.set(boundTo, paymentHash)
       }
       invoices.set(paymentHash, invoice)
-      const body = {pr: fakeInvoice(amount, preimage), disposable: false}
+      const body = {pr, disposable: false}
       if (opts.verify) body.verify = `${origin}/verify/${paymentHash}`
       // Appended last, and only when the quote really was bound, so a
       // mock that was never told about any of this answers byte for byte
       // what it always answered.
       if (echoBound) body.mintToHash = true
+      if (
+        echoBound &&
+        boundTo &&
+        opts.mintReceipt &&
+        opts.verify &&
+        opts.signatures
+      ) {
+        body.mint = {h: boundTo, amount: net}
+      }
       return send(body)
     }
 
@@ -652,7 +673,7 @@ export const createMockMint = async (options = {}) => {
       }
       const invoice = invoices.get(verifyMatch[1].toLowerCase())
       if (!invoice) return fail('Unknown payment hash.')
-      return send({
+      const body = {
         status: 'OK',
         settled: invoice.settled,
         // the preimage IS the bearer secret here - a real SERVICE should
@@ -661,8 +682,18 @@ export const createMockMint = async (options = {}) => {
         // bound with its own h: that note is credited elsewhere, so the
         // preimage is an ordinary payment proof and leaks nothing.
         preimage: invoice.settled || opts.verifyLeaksEarly ? invoice.preimage : null,
-        pr: fakeInvoice(invoice.amountMsat, invoice.preimage)
-      })
+        pr: invoice.pr ?? fakeInvoice(invoice.amountMsat, invoice.preimage)
+      }
+      if (invoice.boundTo && opts.mintReceipt && opts.signatures) {
+        body.mint = {
+          h: invoice.boundTo,
+          amount: invoice.amountMsat,
+          ...(invoice.settled
+            ? {sig: sign(invoice.boundTo, invoice.amountMsat)}
+            : {})
+        }
+      }
+      return send(body)
     }
 
     // ---- LUD-03 informational GET ----
@@ -776,7 +807,8 @@ export const createMockMint = async (options = {}) => {
           invoices.set(paymentHash, {
             amountMsat: note.amountMsat,
             preimage: meltPreimage,
-            settled: false
+            settled: false,
+            pr
           })
         }
         if (!opts.meltNeverSettles) {

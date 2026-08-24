@@ -454,6 +454,45 @@ check('the worked settlement recomputes from its own secrets', () => {
   assert(s.unbound.preimageIsAValidK1 === true, 'the preimage does not open an unbound note')
 })
 
+check('the optional bound receipt is tied to the quote and authenticates the note', () => {
+  const {receipt, settlement} = mintToHash
+  const quote = receipt.quote
+  const pending = receipt.unsettled
+  const settled = receipt.settled
+  assert(receipt.optional === true, 'the additive receipt is not marked optional')
+  assert(receipt.keyEstablishment.payRequest.mintPubkey === sig.mintPubkey, 'the receipt key is unavailable before payment')
+  assert(quote.mintToHash === true, 'the receipt quote is not explicitly bound')
+  assert(quote.mint.h === settlement.h, 'the quote commits a different h')
+  assert(Number.isSafeInteger(quote.mint.amount) && quote.mint.amount > 0, 'the quote amount is not positive integer msat')
+  assert(quote.mint.sig === undefined, 'the quote is already signed before settlement')
+  assert(pending.settled === false && pending.mint.sig === undefined, 'an unsettled response carries a signature')
+  assert(settled.settled === true, 'the settled fixture is not settled')
+  assert(settled.pr === quote.pr, 'verify names a different invoice')
+  assert(settled.mint.h === quote.mint.h, 'verify changes h')
+  assert(settled.mint.amount === quote.mint.amount, 'verify changes the net amount')
+
+  const bytes = hexToBytes(settled.mint.sig)
+  assert(bytes.length === 65, 'the receipt signature is not recoverable')
+  const digest = digestOf(settlement.walletSecret, settled.mint.amount)
+  const leading = new Uint8Array([bytes[64], ...bytes.subarray(0, 64)])
+  let recovered = null
+  for (const candidate of [leading, bytes]) {
+    try {
+      recovered = bytesToHex(secp256k1.recoverPublicKey(candidate, digest, {prehash: false}))
+      if (recovered === sig.mintPubkey) break
+    } catch {
+      // try the other recoverable-signature ordering
+    }
+  }
+  assert(recovered === sig.mintPubkey, 'the receipt signature does not authenticate the bound note')
+
+  const invalid = new Map(receipt.invalid.map(c => [c.name, c]))
+  assert(invalid.get('quote commits a different h').quote.mint.h !== quote.mint.h, 'no wrong-h case')
+  assert(invalid.get('verify changes the net amount').verify.mint.amount !== quote.mint.amount, 'no wrong-amount case')
+  assert(invalid.get('signature appears before settlement').verify.mint.sig, 'no premature-signature case')
+  assert(invalid.get('settled response has the wrong signature').verify.mint.sig !== settled.mint.sig, 'no bad-signature case')
+})
+
 check('the capability is fixed in all three places, and only the boolean true means yes', () => {
   const field = mintToHash.advertisement.field
   const places = mintToHash.advertisement.places.map(p => p.where)

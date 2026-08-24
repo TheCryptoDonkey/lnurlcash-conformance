@@ -453,6 +453,48 @@ if (!/preimage opens nothing/.test(detailOf(bound, BOUND_CHECK))) {
 }
 console.log('ok   a bound mint credits the wallet\'s own hash, and the preimage opens nothing')
 
+// The optional sealed-signer receipt is additive: off on the baseline mock,
+// and when enabled it commits before payment but signs only after settlement.
+{
+  const mint = await createMockMint({
+    testHooks: true,
+    mintToHash: true,
+    mintReceipt: true
+  })
+  try {
+    const payRequest = await (await fetch(`${mint.url}/.well-known/lnurlp/mint`)).json()
+    if (payRequest.mintToHash !== true || payRequest.mintPubkey !== mint.state.pubkey) {
+      die('the receipt mock did not publish its verification key before payment')
+    }
+    const secret = bytesToHex(randomBytes(32))
+    const h = bytesToHex(sha256(hexToBytes(secret)))
+    const quote = await (await fetch(`${mint.url}/p/cb?amount=21000&h=${h}`)).json()
+    if (quote.mintToHash !== true || quote.mint?.h !== h || quote.mint?.amount !== 21000) {
+      die('the receipt mock did not commit the bound quote before payment')
+    }
+    if (quote.mint.sig !== undefined) die('the receipt mock signed an unpaid quote')
+    const pending = await (await fetch(quote.verify)).json()
+    if (pending.settled !== false || pending.mint?.sig !== undefined) {
+      die('the receipt mock signed before settlement')
+    }
+    const paymentHash = quote.verify.split('/').pop()
+    await fetch(`${mint.url}/_test/settle?payment_hash=${paymentHash}`)
+    const settled = await (await fetch(quote.verify)).json()
+    if (
+      settled.settled !== true ||
+      settled.pr !== quote.pr ||
+      settled.mint?.h !== quote.mint.h ||
+      settled.mint?.amount !== quote.mint.amount ||
+      typeof settled.mint?.sig !== 'string'
+    ) {
+      die('the receipt mock did not bind and sign the settled response')
+    }
+  } finally {
+    await mint.close()
+  }
+}
+console.log('ok   optional bound receipt commits before payment and signs only after settlement')
+
 // The mint that advertises the capability, takes the parameter, and mints
 // the note at the payment hash anyway. The wallet stopped rotating on
 // sight because it was told it did not need to, so this is the worst of

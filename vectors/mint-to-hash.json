@@ -198,7 +198,7 @@
       "noteId": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
       "k1": "0505050505050505050505050505050505050505050505050505050505050505",
       "preimageIsAValidK1": false,
-      "note": "the wallet can claim by asking the withdraw endpoint for its own secret directly - it never needs the verify poll at all"
+      "note": "a software wallet can claim by asking the withdraw endpoint for its own secret directly. A sealed signer that will not export that secret instead uses the optional bound receipt below to confirm the note without revealing k1"
     },
     "unbound": {
       "noteId": "e802086ad6a1e16b78352ad7296d2aabd835b1b16dbe951e1135b97c68e29d81",
@@ -206,6 +206,108 @@
       "preimageIsAValidK1": true,
       "note": "the wallet must poll verify for the preimage, and rotate the instant it has it"
     }
+  },
+  "receipt": {
+    "description": "An optional LUD-21 settlement receipt for a bound quote. This is needed by a sealed signer that generated k1 but will not export it merely so its companion app can probe the withdraw endpoint. The quote commits to the exact output id and net amount before payment. Once settled, verify repeats that commitment and adds the ordinary LUD-25 note signature. No field changes the legacy LUD-21 meaning of preimage: it remains payment proof and still does not open the bound note.",
+    "optional": true,
+    "field": "mint",
+    "keyEstablishment": {
+      "rule": "The WALLET must know the receipt verification key before it pays: recover the signing node identity from the BOLT-11 invoice, or read mintPubkey from the payRequest under the wallet's existing trust/pinning policy.",
+      "payRequest": {
+        "mintToHash": true,
+        "mintPubkey": "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa"
+      }
+    },
+    "commitment": {
+      "h": "the normalised output id committed by this quote; 32 bytes as 64 lowercase hex",
+      "amount": "the exact net note value in millisatoshis after fees",
+      "sig": "absent before settlement; after settlement, the ordinary recoverable LUD-25 signature over LNURLcash:<amount>:<h>"
+    },
+    "quote": {
+      "pr": "lnbc210n1pjqrstuvwxyz",
+      "verify": "https://mint.example/verify/e802086ad6a1e16b78352ad7296d2aabd835b1b16dbe951e1135b97c68e29d81",
+      "mintToHash": true,
+      "mint": {
+        "h": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
+        "amount": 21000
+      }
+    },
+    "unsettled": {
+      "status": "OK",
+      "settled": false,
+      "preimage": null,
+      "pr": "lnbc210n1pjqrstuvwxyz",
+      "mint": {
+        "h": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
+        "amount": 21000
+      }
+    },
+    "settled": {
+      "status": "OK",
+      "settled": true,
+      "preimage": "0606060606060606060606060606060606060606060606060606060606060606",
+      "pr": "lnbc210n1pjqrstuvwxyz",
+      "mint": {
+        "h": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
+        "amount": 21000,
+        "sig": "5559e4ad39ea32a9f8dba641cc69e2874e962fd569cd661b5278ccd13f647d6e74bce7105178f3817f1938cee81765cc3ab9005a5821c5d2228c2003418542ea01"
+      }
+    },
+    "walletRules": [
+      "A WALLET that requires a receipt MUST refuse to show or pay an invoice unless quote.mintToHash is exactly true and quote.mint matches the h it requested and the exact amount it expects to receive.",
+      "Before accepting settlement, it MUST match verify.pr to quote.pr, match verify.mint.h and verify.mint.amount to the quote commitment, require settled to be exactly true, and verify mint.sig with the mint public key and its locally held k1.",
+      "A SERVICE MUST NOT return mint.sig before settlement. An unsettled response MAY repeat h and amount so a wallet can diagnose a mismatch, but that repetition is not a receipt.",
+      "Absence of quote.mint means the optional receipt is not offered. A software wallet can still use mintToHash and claim with its own k1; a sealed signer falls back before payment to the legacy preimage-and-rotate flow."
+    ],
+    "invalid": [
+      {
+        "name": "quote commits a different h",
+        "quote": {
+          "mintToHash": true,
+          "mint": {
+            "h": "e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e",
+            "amount": 21000
+          }
+        },
+        "reason": "the invoice is not demonstrably buying the output the wallet named"
+      },
+      {
+        "name": "verify changes the net amount",
+        "verify": {
+          "settled": true,
+          "mint": {
+            "h": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
+            "amount": 20999,
+            "sig": "5559e4ad39ea32a9f8dba641cc69e2874e962fd569cd661b5278ccd13f647d6e74bce7105178f3817f1938cee81765cc3ab9005a5821c5d2228c2003418542ea01"
+          }
+        },
+        "reason": "the settled receipt is not the commitment shown before payment"
+      },
+      {
+        "name": "signature appears before settlement",
+        "verify": {
+          "settled": false,
+          "mint": {
+            "h": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
+            "amount": 21000,
+            "sig": "5559e4ad39ea32a9f8dba641cc69e2874e962fd569cd661b5278ccd13f647d6e74bce7105178f3817f1938cee81765cc3ab9005a5821c5d2228c2003418542ea01"
+          }
+        },
+        "reason": "a note signature is evidence of minted value and cannot be issued speculatively"
+      },
+      {
+        "name": "settled response has the wrong signature",
+        "verify": {
+          "settled": true,
+          "mint": {
+            "h": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
+            "amount": 21000,
+            "sig": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        "reason": "the signer cannot confirm a note the mint has not authenticated"
+      }
+    ]
   },
   "normalisation": {
     "description": "One worked pair, so an implementation can check that the two spellings name one output rather than two.",
@@ -441,7 +543,7 @@
     "A WALLET MUST send `h` as 64 lowercase hex. A SERVICE SHOULD normalise case before comparing and MUST NOT read the two spellings as two outputs, but a wallet that leans on that will meet a SERVICE that refuses upper case outright.",
     "A WALLET MUST decide from the payRequest, which every SERVICE publishes, rather than from the experimental mint address document, which many do not. A SERVICE that does not advertise `mintToHash` ignores `h`, and the note it mints is the preimage's.",
     "A WALLET MUST check the pay callback's own `mintToHash` before it pays. The other two advertisements can be cached or stale; that one is this quote, now. Absent means not bound, so claim the preimage way and rotate on sight.",
-    "Against a SERVICE that does advertise it, a WALLET needs no verify poll to claim: it knows its own secret, so it asks the withdraw endpoint for it directly. Keep the poll as the fallback for SERVICEs without the capability.",
+    "Against a SERVICE that advertises mintToHash, a software WALLET needs no verify poll to claim: it knows its own secret, so it asks the withdraw endpoint for it directly. A sealed signer that will not export k1 MAY require the optional bound receipt and use verify only as authenticated settlement evidence.",
     "A note minted at a WALLET-chosen hash is the WALLET's from birth. A wallet deriving its secrets from a seed can restore that note from the seed alone, which a preimage-secret note can never be."
   ]
 }

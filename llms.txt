@@ -54,6 +54,8 @@ payRequest, the same on the mint address document, and the same echoed on
 the pay callback's own response when THAT quote was bound.
 mintToHashAdvertisedOn=payRequest,mintAddress,quote narrows which of the
 three claim it (all three by default; it changes only what is claimed).
+mintReceipt=true adds mint:{h,amount} to an honestly bound quote and adds
+sig only to its settled LUD-21 response; it requires mintToHash.
 Misbehaviours, each needing mintToHash as well: mintToHashAcceptsMalformedH,
 mintToHashAcceptsUsedH, mintToHashIgnoresH.
 
@@ -132,6 +134,14 @@ output is refused with "Invalid or already spent k1.", the same reason the
 withdraw callback gives, so no oracle appears. A WALLET MUST persist its
 secret BEFORE asking for the invoice. Purely additive: without h, nothing
 changes. Table in mint-to-hash.json.
+
+For a sealed signer, mint-to-hash may add a bound settlement receipt. The
+quote carries mint:{h,amount}, where amount is exact net msat and no sig is
+allowed. Settled LUD-21 repeats the same h/amount and adds the ordinary
+LUD-25 signature; the wallet matches pr/h/amount and verifies the signature
+before PENDING -> CONFIRMED. Absence of mint is compatible and falls back to
+the legacy preimage/import/rotate flow. Full proposed wire text and matrix:
+docs/BOUND-MINT-RECEIPTS.md.
 
 ## The retried mutation
 
