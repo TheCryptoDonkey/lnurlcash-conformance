@@ -89,7 +89,17 @@ const isNpub = value => {
   }
 }
 
-const get = async (url, timeoutMs = 15_000) => {
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+// A mint may rate limit, and the good ones do: every mint quote issues a
+// real invoice on a real node, so a grader firing a dozen of them looks
+// exactly like the abuse the limiter exists to stop. An HTTP 429 is the
+// grade failing to complete, NOT a verdict on the mint, so it is waited
+// out (honouring Retry-After) and retried. Without this the mint is
+// accused of whatever the check happened to be probing when the bucket
+// ran dry - a conforming mint graded as broken, which is worse than no
+// grade at all.
+const get = async (url, timeoutMs = 15_000, retriesLeft = 2) => {
   const res = await fetch(url.toString(), {signal: AbortSignal.timeout(timeoutMs)})
   const text = await res.text()
   let body
@@ -97,6 +107,17 @@ const get = async (url, timeoutMs = 15_000) => {
     body = JSON.parse(text)
   } catch {
     throw new Error(`response was not JSON: ${text.slice(0, 120)}`)
+  }
+  if (res.status === 429) {
+    if (retriesLeft > 0) {
+      const after = Number(res.headers.get('retry-after'))
+      const waitMs = Math.min(Number.isFinite(after) && after > 0 ? after * 1000 : 10_000, 30_000)
+      await sleep(waitMs + 250)
+      return get(url, timeoutMs, retriesLeft - 1)
+    }
+    throw soft(
+      `the mint rate limited this grade (HTTP 429${body?.reason ? `: ${body.reason}` : ''}) - space the run out and grade again; nothing here is a verdict on the mint`
+    )
   }
   return body
 }
@@ -449,119 +470,186 @@ export const gradeMint = async (payUrl, report) => {
     return detail
   })
 
-  // Naming the note you are buying. Optional, outside LUD-25, and soft in
-  // the direction that matters: a mint that says nothing anywhere and
-  // ignores `h` mints exactly what the draft describes, which is every
-  // mint today and not a defect. What is graded is a mint that CLAIMS the
+  // Naming the note you are buying. No longer outside LUD-25: the draft
+  // spells it `comment = hex(sha256(secret))` (Protecting a freshly minted
+  // note from a preimage race), advertised as a `commentAllowed` of at
+  // least 64 - enough for a hex-encoded 32-byte hash. `mintToHash` is the
+  // parameter form one mint shipped before the comment form was written.
+  // Both are read here: a suite that knows only one spelling reports a
+  // mint that names notes perfectly well in the other as not offering it
+  // at all, which is worse than silence - it tells a wallet author the
+  // safe mint is the unsafe one.
+  //
+  // Soft in the direction that matters: a mint that says nothing anywhere
+  // and names nothing mints exactly what the draft's fallback describes,
+  // which is not a defect. What is graded is a mint that CLAIMS the
   // capability, because a wallet then stops rotating on sight and trusts
   // the mint to bind the note.
   //
-  // The claim lives in three places and they say different things. The
-  // payRequest's `mintToHash: true` means "I accept an h on my pay
-  // callback", and since every mint publishes a payRequest while the mint
-  // address document is experimental, that is the one to decide from. The
-  // mint address document repeats it, as corroboration. The pay
-  // callback's own response echoes it when THAT quote was bound, which is
-  // the one that matters at the moment money moves: the other two can be
-  // cached or stale. Anything that is not exactly the boolean true is no.
-  await report.check('accepts an output hash on the mint quote (mintToHash, optional)', async () => {
+  // The claim lives in three places. The payRequest is the one to decide
+  // from, since every mint publishes one while the mint address document
+  // is experimental; the mint address repeats it as corroboration; and the
+  // pay callback's own response echoes `mintToHash` when THAT quote was
+  // bound. LUD-25 defines no echo for the comment spelling, so a missing
+  // echo is only held against a mint claiming `mintToHash`.
+  //
+  // The two spellings are NOT symmetric, and that is why this cannot be
+  // one probe with two parameter names:
+  //
+  //   `h` is a parameter invented for exactly this purpose, so a malformed
+  //   one is a wallet error and MUST be refused before an invoice exists.
+  //
+  //   `comment` is plain LUD-12 free text that any wallet may send for
+  //   unrelated reasons, so LUD-25 requires the opposite (line 80 of the
+  //   draft): a comment that is not a bare hex-encoded 32-byte hash MUST
+  //   fall back to crediting the note as k1=P, never be refused - and on
+  //   that fallback the mint MUST NOT serve LUD-21 verify, because there
+  //   P is not proof of payment, it is the entire note.
+  await report.check('accepts a named output on the mint quote (LUD-25 comment / mintToHash, optional)', async () => {
     const amount = Math.max(pay.minSendable, 1000)
-    const quoteAt = async (h, msat = amount) => {
+
+    // LUD-25: "A mint payLink intending to support this SHOULD advertise a
+    // commentAllowed of at least 64". Anything shorter cannot carry the
+    // hash at all, so it is not this capability whatever else it is.
+    const spellingsOf = source => {
+      const found = []
+      if (source?.mintToHash === true) found.push('h')
+      if (Number.isFinite(source?.commentAllowed) && source.commentAllowed >= 64) found.push('comment')
+      return found
+    }
+    const quoteAt = async (spelling, value, msat = amount) => {
       const url = new URL(pay.callback)
       url.searchParams.set('amount', String(msat))
-      url.searchParams.set('h', h)
+      url.searchParams.set(spelling, value)
       return get(url)
     }
+    const spelt = spelling => (spelling === 'comment' ? 'a LUD-12 comment' : 'an h parameter')
+
+    const advertised = spellingsOf(pay)
+    const corroborated = spellingsOf(mintAddress)
+    const claimed = [...new Set([...advertised, ...corroborated])]
 
     // Asked of every mint, advertisement or not: a mint that echoes the
     // capability without publishing it is still claiming it, and a wallet
     // reading the echo would believe it. Nothing pays the invoice that
     // comes back, so this is read-only - an unpaid quote costs a mint an
     // invoice and nothing else.
-    const secret = bytesToHex(randomBytes(32))
-    const h = noteId(secret)
-    const bound = await quoteAt(h)
-    const advertised = pay.mintToHash === true
-    const corroborated = mintAddress?.mintToHash === true
-    const echoed = bound.mintToHash === true
+    // A fresh secret per spelling, never one shared between them: a mint
+    // that accepts both and binds an output id uniquely - as it should,
+    // and as the repeat probe below asserts - would rightly refuse the
+    // second spelling for naming an output the first just took.
+    const probed = claimed.length > 0 ? claimed : ['h']
+    const named = Object.fromEntries(
+      probed.map(spelling => {
+        const secret = bytesToHex(randomBytes(32))
+        return [spelling, {secret, h: noteId(secret)}]
+      })
+    )
+    const bound = {}
+    for (const spelling of probed) bound[spelling] = await quoteAt(spelling, named[spelling].h)
+    const echoedIn = probed.filter(spelling => bound[spelling].mintToHash === true)
 
-    if (!advertised && !corroborated && !echoed) {
+    if (claimed.length === 0 && echoedIn.length === 0) {
+      const refused = probed.map(spelling => bound[spelling]).find(body => body.status === 'ERROR')
       throw soft(
-        bound.status === 'ERROR'
-          ? `not offered, and an h on the quote was refused outright: ${bound.reason}`
+        refused
+          ? `not offered, and a named output was refused outright: ${refused.reason}`
           : 'not offered - a minted note\'s k1 is the invoice preimage, which every routing node on the payment path learns, so a wallet must claim and rotate the instant it settles'
       )
     }
 
     const problems = []
     const claimedBy = [
-      advertised && 'the payRequest',
-      corroborated && 'the mint address',
-      echoed && 'the quote itself'
+      advertised.length > 0 && `the payRequest (${advertised.join(', ')})`,
+      corroborated.length > 0 && `the mint address (${corroborated.join(', ')})`,
+      echoedIn.length > 0 && 'the quote itself'
     ].filter(Boolean)
 
-    assert(
-      bound.status !== 'ERROR',
-      `claims mintToHash (${claimedBy.join(', ')}) and refused a well-formed h: ${bound.reason}`
-    )
-    assert(typeof bound.pr === 'string', 'no pr in the response')
-    const invoiced = invoiceAmountMsat(bound.pr)
-    if (invoiced !== null) {
-      assert(invoiced === amount, `asked for ${amount} msat, invoiced ${invoiced} msat`)
+    for (const spelling of probed) {
+      const body = bound[spelling]
+      assert(
+        body.status !== 'ERROR',
+        `claims this capability (${claimedBy.join(', ')}) and refused a well-formed hash sent as ${spelt(spelling)}: ${body.reason}`
+      )
+      assert(typeof body.pr === 'string', `no pr in the response to ${spelt(spelling)}`)
+      const invoiced = invoiceAmountMsat(body.pr)
+      if (invoiced !== null) {
+        assert(invoiced === amount, `asked for ${amount} msat, invoiced ${invoiced} msat`)
+      }
     }
 
     // A quote is not a note. Crediting one before its invoice settles
     // would hand out money for nothing.
     const withdrawUrl = pay.withdrawLink ? fromLud17(pay.withdrawLink) : null
     if (withdrawUrl) {
-      const probe = new URL(withdrawUrl)
-      probe.searchParams.set('k1', secret)
-      const early = await get(probe)
-      assert(
-        early.status === 'ERROR',
-        'the note exists before anything paid for it - a quote is not a note'
-      )
+      for (const spelling of probed) {
+        const probe = new URL(withdrawUrl)
+        probe.searchParams.set('k1', named[spelling].secret)
+        const early = await get(probe)
+        assert(
+          early.status === 'ERROR',
+          'the note exists before anything paid for it - a quote is not a note'
+        )
+      }
     }
 
-    // A malformed h must be refused BEFORE an invoice exists. A wallet
-    // that pays a quote the mint was always going to reject has bought
-    // nothing, and the mint keeps the sats.
-    //
     // Malformed means not 32 bytes of hex, in any casing. Upper case is a
     // spelling, not a defect, and it is deliberately not probed: a WALLET
     // MUST send lowercase and every client here does, a SERVICE SHOULD
     // normalise before comparing, and one that refuses upper case outright
     // is strict rather than wrong - the wallet learns before it pays.
-    for (const [what, value] of [
+    const malformed = [
       ['not hex', 'z'.repeat(64)],
       ['a character short', '0'.repeat(63)],
       ['a character long', '0'.repeat(65)],
       ['empty', '']
-    ]) {
-      const body = await quoteAt(value)
-      assert(
-        body.status === 'ERROR' && !body.pr,
-        `issued an invoice for an h that is ${what} - a wallet would pay for a quote this mint cannot honour`
-      )
+    ]
+
+    for (const spelling of probed) {
+      for (const [what, value] of malformed) {
+        const body = await quoteAt(spelling, value)
+        if (spelling === 'h') {
+          // A wallet that pays a quote the mint was always going to reject
+          // has bought nothing, and the mint keeps the sats.
+          assert(
+            body.status === 'ERROR' && !body.pr,
+            `issued an invoice for an h that is ${what} - a wallet would pay for a quote this mint cannot honour`
+          )
+          continue
+        }
+        // The comment spelling, where the draft says the opposite.
+        assert(
+          body.status !== 'ERROR',
+          `refused a comment that is ${what} (${body.reason}) - LUD-25 requires the no-name fallback here, because plain LUD-12 comments are free text and any wallet may send one`
+        )
+        assert(
+          !body.verify,
+          `served a LUD-21 verify URL on a quote whose comment is ${what}, which the draft credits as k1=P - verify then hands the note itself to anyone holding the invoice, not merely proof that it was paid`
+        )
+      }
     }
 
-    // The three claims must agree. None of these disagreements loses
-    // anyone money on its own - a wallet reading a missing field as false
-    // falls back to the preimage flow, which is safe - so each is named
-    // rather than failed. Whether the mint really binds is the one thing
-    // this check cannot see, because that needs a settlement: it is
-    // graded separately, and failed rather than warned.
-    if (!echoed) {
+    // The claims must agree. None of these disagreements loses anyone
+    // money on its own - a wallet reading a missing field as false falls
+    // back to the preimage flow, which is safe - so each is named rather
+    // than failed. Whether the mint really binds is the one thing this
+    // check cannot see, because that needs a settlement: it is graded
+    // separately, and failed rather than warned.
+    if (advertised.includes('h') && echoedIn.length === 0) {
       problems.push(
         'bound quotes carry no mintToHash in the response, so a wallet cannot confirm at the one moment it is worth confirming, and falls back to racing the preimage'
       )
     }
-    if (echoed && !advertised) {
+    if (echoedIn.length > 0 && advertised.length === 0) {
       problems.push(
         'echoes mintToHash on a quote but does not advertise it on the payRequest, which is the endpoint every mint publishes and the one a wallet decides from'
       )
     }
-    if (advertised && mintAddress && !corroborated) {
+    // Only the `mintToHash` spelling belongs in both documents. LUD-25 asks
+    // a mint *payLink* to advertise `commentAllowed`, and the mint address
+    // document is a withdrawRequest, where a LUD-12 comment has nowhere to
+    // go - its absence there is correct, not a disagreement.
+    if (advertised.includes('h') && mintAddress && !corroborated.includes('h')) {
       problems.push('the payRequest advertises mintToHash and the mint address document does not')
     }
 
@@ -573,15 +661,17 @@ export const gradeMint = async (payUrl, report) => {
     // rule the withdraw callback already enforces.
     const otherAmount = Math.min(pay.maxSendable, amount * 2)
     if (otherAmount !== amount) {
-      const twice = await quoteAt(h, otherAmount)
-      if (twice.status !== 'ERROR') {
-        problems.push(
-          'issued a second quote against an output hash it had already bound - whichever payment settles first takes the id, and the other payer has bought nothing'
-        )
+      for (const spelling of probed) {
+        const twice = await quoteAt(spelling, named[spelling].h, otherAmount)
+        if (twice.status !== 'ERROR') {
+          problems.push(
+            `issued a second quote against an output already named by ${spelt(spelling)} - whichever payment settles first takes the id, and the other payer has bought nothing`
+          )
+        }
       }
     }
     if (problems.length > 0) throw soft(problems.join('; '))
-    return `claimed by ${claimedBy.join(', ')}; bound a quote to a hash of the runner's own secret and refused four malformed ones`
+    return `named by ${probed.join(' and ')}; claimed by ${claimedBy.join(', ')}; bound a quote to a hash of the runner's own secret and handled four malformed ones as the draft requires`
   })
 
   // The payRequest, with the mint address the checks above fetched hung

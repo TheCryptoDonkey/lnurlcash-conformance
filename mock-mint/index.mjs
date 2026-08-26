@@ -211,7 +211,30 @@ const DEFAULTS = {
   // 'payRequest,mintAddress' is the one that binds without confirming at
   // the moment money moves. Read only when mintToHash is on. Accepts an
   // array or a comma-separated string, so the CLI can pass one.
-  mintToHashAdvertisedOn: undefined
+  mintToHashAdvertisedOn: undefined,
+
+  // The SAME capability in the spelling LUD-25 actually specifies:
+  // `comment = hex(sha256(secret))` (LUD-12), advertised as a
+  // `commentAllowed` of at least 64. A number advertises that many
+  // characters and reads `comment` as the output name; false says
+  // nothing and reads nothing. Independent of mintToHash - a mint may
+  // ship either, both, or neither.
+  //
+  // The two spellings are not symmetric, and that is the whole reason
+  // both exist here. `h` is a parameter invented for naming, so a
+  // malformed one MUST be refused before an invoice exists. `comment` is
+  // plain LUD-12 free text any wallet may send for unrelated reasons, so
+  // LUD-25 requires the opposite: fall back to crediting k1=P, never
+  // refuse - and MUST NOT serve verify on that fallback, where P is not
+  // proof of payment but the note itself.
+  commentAllowed: false,
+  // non-compliant, commentAllowed on: refuse a comment that is not a
+  // bare 32-byte hex hash instead of falling back, so an ordinary LUD-12
+  // wallet cannot pay this mint at all
+  commentRefusesMalformed: false,
+  // non-compliant, commentAllowed on: serve LUD-21 verify even on the
+  // no-comment fallback, where the preimage it hands out IS the note
+  verifyOnUnnamedMint: false
 }
 
 export const createMockMint = async (options = {}) => {
@@ -466,6 +489,11 @@ export const createMockMint = async (options = {}) => {
         // the option is on, so a mock started with no options answers
         // exactly what it always answered.
         ...(mintToHashPlaces.has('payRequest') ? {mintToHash: true} : {}),
+        // LUD-25: "A mint payLink intending to support this SHOULD
+        // advertise a commentAllowed of at least 64". A payRequest field
+        // only - the mint address document is a withdrawRequest, where a
+        // LUD-12 comment has nowhere to go.
+        ...(opts.commentAllowed ? {commentAllowed: opts.commentAllowed} : {}),
         // A receipt verifier needs the signing key before payment. The
         // baseline mock remains byte-for-byte unchanged when receipts are
         // off; a real node-key signer can alternatively be recovered from
@@ -637,6 +665,36 @@ export const createMockMint = async (options = {}) => {
         }
       }
 
+      // The LUD-25 spelling. Read after `h` so a mock offering both lets
+      // an explicit comment name the output, and deliberately NOT an
+      // else-branch: a mint may ship either spelling or both.
+      let namedByComment = false
+      if (opts.commentAllowed) {
+        const sent = q.get('comment')
+        if (sent !== null && sent !== '') {
+          const wellFormed = /^[0-9a-f]{64}$/i.test(sent)
+          if (wellFormed) {
+            const h = sent.toLowerCase()
+            // Same collision rule the `h` spelling gets: an id already
+            // spoken for must never be minted over, whichever parameter
+            // named it.
+            if (outputIdInUse(h) && !opts.mintToHashAcceptsUsedH) {
+              return fail('Invalid or already spent k1.')
+            }
+            if (!opts.mintToHashIgnoresH) {
+              boundTo = h
+              namedByComment = true
+            }
+          } else if (opts.commentRefusesMalformed) {
+            // The non-compliant branch. LUD-25 says a comment that is not
+            // a bare hash MUST fall back, because plain LUD-12 comments
+            // are free text: refusing one turns an ordinary "thanks!"
+            // into a mint that cannot be paid.
+            return fail('Invalid comment.')
+          }
+        }
+      }
+
       const preimage = bytesToHex(randomBytes(32))
       const paymentHash = noteId(preimage)
       const pr = fakeInvoice(amount, preimage)
@@ -647,7 +705,14 @@ export const createMockMint = async (options = {}) => {
       }
       invoices.set(paymentHash, invoice)
       const body = {pr, disposable: false}
-      if (opts.verify) body.verify = `${origin}/verify/${paymentHash}`
+      // LUD-25 gates verify on whether the note was named: in the
+      // no-comment fallback the preimage verify would hand out IS the
+      // note's entire bearer secret, so a mint offering the comment
+      // spelling must withhold verify from quotes that used it. A mock
+      // that never heard of the comment spelling keeps answering exactly
+      // as it always did.
+      const verifySafe = !opts.commentAllowed || namedByComment || opts.verifyOnUnnamedMint
+      if (opts.verify && verifySafe) body.verify = `${origin}/verify/${paymentHash}`
       // Appended last, and only when the quote really was bound, so a
       // mock that was never told about any of this answers byte for byte
       // what it always answered.
