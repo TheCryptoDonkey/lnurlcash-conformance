@@ -4,7 +4,7 @@ Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may add or tighten checks that a previously-passing mint now fails; pin an
 exact version if you gate CI on the grade.
 
-## Unreleased
+## 0.4.0 - 2026-08-26
 
 **The mint-output naming check now reads the spelling LUD-25 actually
 specifies.** The draft names the output with a LUD-12 `comment = hex(h)`,
