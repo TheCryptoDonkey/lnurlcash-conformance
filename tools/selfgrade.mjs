@@ -335,7 +335,7 @@ console.log('ok   a mint replaying a retried mutation passes, and a real double-
 // has not implemented it mints exactly what LUD-25 describes, and must
 // still grade clean.
 
-const MINT_TO_HASH_CHECK = 'accepts an output hash on the mint quote (mintToHash, optional)'
+const MINT_TO_HASH_CHECK = 'accepts a named output on the mint quote (LUD-25 comment / mintToHash, optional)'
 const BOUND_CHECK = 'a bound mint credits the hash the wallet named (optional)'
 
 if (statusOf(bare, MINT_TO_HASH_CHECK) !== 'warn') {
@@ -412,6 +412,60 @@ if (statusOf(doubleSold, MINT_TO_HASH_CHECK) !== 'warn') {
 }
 if (doubleSold.failed > 0) die('a mint selling one output id twice FAILED - that refusal is an inference, so it warns')
 console.log('ok   a second quote against one output id warns and never fails')
+
+// ---- the same capability, spelt the way LUD-25 actually spells it ------
+//
+// `comment = hex(sha256(secret))` (LUD-12), advertised as commentAllowed
+// >= 64. A suite that knows only `mintToHash` reports a mint naming notes
+// in this spelling as offering nothing, which tells a wallet author the
+// safe mint is the unsafe one.
+
+const byComment = await grade({commentAllowed: 64})
+if (statusOf(byComment, MINT_TO_HASH_CHECK) !== 'pass') {
+  die(`a mint naming outputs by LUD-12 comment did not pass: ${detailOf(byComment, MINT_TO_HASH_CHECK)}`)
+}
+if (!/named by comment/.test(detailOf(byComment, MINT_TO_HASH_CHECK))) {
+  die(`the report does not say which spelling was used: ${detailOf(byComment, MINT_TO_HASH_CHECK)}`)
+}
+if (byComment.failed > 0) die('a mint naming outputs by comment FAILED the grade')
+console.log('ok   a mint naming outputs by LUD-12 comment passes, and the report names the spelling')
+
+// commentAllowed under 64 cannot carry a hex-encoded 32-byte hash at all,
+// so it is an ordinary LUD-12 comment box and not this capability.
+const shortComment = await grade({commentAllowed: 32})
+if (statusOf(shortComment, MINT_TO_HASH_CHECK) !== 'warn') {
+  die(`commentAllowed of 32 was read as the naming capability: ${statusOf(shortComment, MINT_TO_HASH_CHECK)}`)
+}
+console.log('ok   a commentAllowed too short to hold a hash is not read as the capability')
+
+// LUD-25: a comment that is not a bare hash MUST fall back to k1=P, never
+// be refused - plain LUD-12 comments are free text, and a wallet sending
+// "thanks!" must still be able to pay.
+const refusesText = await grade({commentAllowed: 64, commentRefusesMalformed: true})
+if (statusOf(refusesText, MINT_TO_HASH_CHECK) !== 'fail') {
+  die(`a mint refusing an ordinary comment did not fail: ${statusOf(refusesText, MINT_TO_HASH_CHECK)}`)
+}
+console.log('ok   a mint refusing an ordinary LUD-12 comment caught')
+
+// LUD-25: in the no-comment fallback the mint MUST NOT serve verify,
+// because the preimage it hands to anyone holding the URL is not proof of
+// payment there - it is the note.
+const leakyFallback = await grade({commentAllowed: 64, verifyOnUnnamedMint: true})
+if (statusOf(leakyFallback, MINT_TO_HASH_CHECK) !== 'fail') {
+  die(`a mint serving verify on the unnamed fallback did not fail: ${statusOf(leakyFallback, MINT_TO_HASH_CHECK)}`)
+}
+console.log('ok   verify served on the no-comment fallback caught')
+
+// Both spellings at once, which is what a mint that shipped mintToHash
+// first and then adopted the draft looks like.
+const bothSpellings = await grade({mintToHash: true, commentAllowed: 64})
+if (statusOf(bothSpellings, MINT_TO_HASH_CHECK) !== 'pass') {
+  die(`a mint offering both spellings did not pass: ${detailOf(bothSpellings, MINT_TO_HASH_CHECK)}`)
+}
+if (!/named by h and comment/.test(detailOf(bothSpellings, MINT_TO_HASH_CHECK))) {
+  die(`the report does not name both spellings: ${detailOf(bothSpellings, MINT_TO_HASH_CHECK)}`)
+}
+console.log('ok   a mint offering both spellings is probed in both, each with its own hash')
 
 // ---- the paid half -----------------------------------------------------
 //

@@ -4,6 +4,50 @@ Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may add or tighten checks that a previously-passing mint now fails; pin an
 exact version if you gate CI on the grade.
 
+## Unreleased
+
+**The mint-output naming check now reads the spelling LUD-25 actually
+specifies.** The draft names the output with a LUD-12 `comment = hex(h)`,
+advertised as a `commentAllowed` of at least 64; `mintToHash` is the
+parameter form one mint shipped before the comment form was written. The
+suite knew only the latter, so a mint naming notes exactly as the draft
+describes graded as "not offered - a minted note's k1 is the invoice
+preimage". That is the worst kind of wrong answer a conformance suite can
+give: it tells a wallet author the safe mint is the unsafe one.
+
+Both spellings are now read from the payRequest and the mint address
+document, probed with a fresh hash each (a mint that binds output ids
+uniquely would rightly refuse the second spelling for naming an output the
+first just took), and reported as `named by comment` / `named by h`.
+
+The two are deliberately not probed identically, because the draft's rules
+for them are opposites:
+
+- `h` is a parameter invented for naming, so a malformed one MUST be
+  refused before an invoice exists. Unchanged.
+- `comment` is plain LUD-12 free text any wallet may send for unrelated
+  reasons, so a comment that is not a bare hash MUST fall back to crediting
+  `k1=P` rather than be refused, and the mint MUST NOT serve LUD-21 `verify`
+  on that fallback - there the preimage is not proof of payment, it is the
+  note. Both are now checked, the second as a failure.
+
+Only `mintToHash` is expected in both documents. `commentAllowed` is a
+payRequest field; the mint address document is a withdrawRequest, where a
+LUD-12 comment has nowhere to go, so its absence there is no longer
+reported as a disagreement.
+
+**A rate-limited grade no longer accuses the mint.** Every mint quote
+issues a real invoice on a real node, so a grader firing a dozen looks like
+the abuse a limiter exists to stop - and probing two spellings nearly
+doubled the count. HTTP 429 was indistinguishable from a spec refusal, so
+the mint was reported as violating whatever check happened to be running
+when the bucket ran dry. 429 is now waited out (honouring `Retry-After`)
+and retried, and reported as an incomplete grade rather than a verdict if
+it persists.
+
+The mock mint gains `commentAllowed`, `commentRefusesMalformed` and
+`verifyOnUnnamedMint` to cover all of this.
+
 ## 0.3.0 - 2026-08-24
 
 - Add an optional bound-mint settlement receipt for sealed signers. A
