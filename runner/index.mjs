@@ -279,6 +279,14 @@ export const gradeMint = async (payUrl, report) => {
     const amount = Math.max(pay.minSendable, 1000)
     const url = new URL(pay.callback)
     url.searchParams.set('amount', String(amount))
+    // A mint advertising comment protection requires a named quote (see
+    // docs/COMMENT-IS-MANDATORY.md), so the plain LUD-06 request an
+    // ordinary wallet would send is refused there by design. Name it the
+    // way a LUD-25 wallet does, or this check grades the mandate rather
+    // than the invoice.
+    if (Number.isFinite(pay.commentAllowed) && pay.commentAllowed >= 64) {
+      url.searchParams.set('comment', noteId(bytesToHex(randomBytes(32))))
+    }
     const body = await get(url)
     assert(body.status !== 'ERROR', `refused: ${body.reason}`)
     assert(typeof body.pr === 'string', 'no pr in the response')
@@ -332,6 +340,15 @@ export const gradeMint = async (payUrl, report) => {
 
   await report.check('publishes a mint address (experimental, optional)', async () => {
     const mirror = payUrl.replace('/.well-known/lnurlp/', '/.well-known/lnurlw/')
+    // The document only has a canonical location on a LUD-16 Lightning
+    // Address, where it mirrors the payRequest's own well-known path. A
+    // mint served from a plain path - an LNbits extension, say - has
+    // nowhere to publish it, and the swap above leaves the URL untouched:
+    // probing it anyway re-fetches the payRequest and reads its
+    // tag as a malformed mint address.
+    if (mirror === payUrl) {
+      throw soft('not published - this mint is not served from a Lightning Address, so there is no well-known lnurlw path to mirror')
+    }
     let body
     try {
       body = await get(mirror)
@@ -617,16 +634,31 @@ export const gradeMint = async (payUrl, report) => {
           )
           continue
         }
-        // The comment spelling, where the draft says the opposite.
+        // The comment spelling. This SUPERSEDES the draft's line 80, which
+        // still asks for a preimage-keyed fallback here - see
+        // docs/COMMENT-IS-MANDATORY.md. A mint advertising comment
+        // protection must refuse rather than fall back: the fallback note
+        // is keyed by the payment preimage, which every routing hop on the
+        // payment learns, and which a funding source that settles without
+        // one cannot produce at all.
         assert(
-          body.status !== 'ERROR',
-          `refused a comment that is ${what} (${body.reason}) - LUD-25 requires the no-name fallback here, because plain LUD-12 comments are free text and any wallet may send one`
-        )
-        assert(
-          !body.verify,
-          `served a LUD-21 verify URL on a quote whose comment is ${what}, which the draft credits as k1=P - verify then hands the note itself to anyone holding the invoice, not merely proof that it was paid`
+          body.status === 'ERROR' && !body.pr,
+          `issued an invoice for a comment that is ${what} - this mint advertises comment protection, so an unnamed quote can only mint a preimage-keyed note, and a wallet that pays for one holds a secret every hop on the route already saw`
         )
       }
+    }
+
+    // The malformed loop above can only probe values; a quote carrying no
+    // comment at all is the commonest way to arrive unnamed, and it is the
+    // one an ordinary LUD-06 wallet sends every time.
+    if (probed.includes('comment')) {
+      const bare = new URL(pay.callback)
+      bare.searchParams.set('amount', String(amount))
+      const body = await get(bare)
+      assert(
+        body.status === 'ERROR' && !body.pr,
+        'issued an invoice for a quote carrying no comment - this mint advertises comment protection, so it must refuse rather than mint a note keyed by the payment preimage'
+      )
     }
 
     // The claims must agree. None of these disagreements loses anyone
@@ -852,6 +884,72 @@ export const gradeNote = async (noteUrl, report, options = {}) => {
       `the URL's own amount changed the reported value: ${body.maxWithdrawable}`
     )
     return 'maxWithdrawable is authoritative'
+  })
+
+  // LUD-25 "Checking a note without exposing it". Optional, and detected
+  // rather than announced: the draft deliberately gives an unrecognized `h`
+  // the same answer an unknown `k1` gets, so a mint that never implemented
+  // it is indistinguishable from one asked about a note it does not hold.
+  // A live note's own hash is therefore the only probe that separates them.
+  await report.check('answers a note lookup by hash without the secret (optional)', async () => {
+    const byHash = new URL(url)
+    byHash.searchParams.delete('k1')
+    byHash.searchParams.delete('amount')
+    byHash.searchParams.set('h', noteId(k1))
+    const body = await get(byHash)
+    if (body.status === 'ERROR' || body.tag !== 'withdrawRequest') {
+      return 'not offered - every informational lookup puts the live secret in a query string, where any proxy that logs full URLs keeps it'
+    }
+    // The whole point of the lookup. A wallet asking by hash already holds
+    // the secret - it could not have computed the hash otherwise - so the
+    // field buys it nothing, and filling it in puts the note back on the
+    // wire this lookup exists to keep it off.
+    assert(
+      body.k1 === undefined,
+      'the response carried a k1 - a lookup by hash must omit it, or it puts the bearer secret back in the reply the wallet asked by hash to avoid'
+    )
+    assert(
+      body.maxWithdrawable === info.maxWithdrawable,
+      `the same note is worth ${body.maxWithdrawable} by hash and ${info.maxWithdrawable} by k1`
+    )
+    // An h it never registered must get the unknown-note answer. One that
+    // answers anyway reports a note where none exists, and a wallet
+    // restoring from seed reads that as a note it has lost the secret to.
+    const nobody = new URL(url)
+    nobody.searchParams.delete('k1')
+    nobody.searchParams.delete('amount')
+    nobody.searchParams.set('h', noteId(bytesToHex(randomBytes(32))))
+    const invented = await get(nobody)
+    assert(
+      invented.status === 'ERROR' || invented.tag !== 'withdrawRequest',
+      'answered for a hash it never registered - an unrecognized h must get the same response an unknown k1 would'
+    )
+    return 'by hash, with no k1 in the reply'
+  })
+
+  // The merge cap. LUD-25 bounds a merge by URL length rather than by the
+  // protocol, and a request past that is truncated somewhere upstream into
+  // a malformed one. Probed with fabricated inputs: nothing here is a real
+  // note, so a compliant SERVICE has two acceptable answers and no third.
+  await report.check('refuses an oversized merge cleanly (optional cap)', async () => {
+    const cb = new URL(info.callback)
+    // Enough repeated k1 to carry the whole URL past the ~2000 characters
+    // browsers, servers and proxies commonly stop at.
+    const many = Math.ceil((2400 - cb.href.length) / 68)
+    for (let i = 0; i < many; i++) {
+      cb.searchParams.append('k1', bytesToHex(randomBytes(32)))
+    }
+    cb.searchParams.append('h', noteId(bytesToHex(randomBytes(32))))
+    const body = await get(cb)
+    // Whatever else it does, it must not say yes. Every input was invented
+    // by this runner and names no note anywhere.
+    assert(
+      body.status !== 'OK',
+      `answered OK to a merge of ${many} notes it has never held - a truncated k1 list read as a shorter merge mints an output against inputs the SERVICE never saw`
+    )
+    return /too many k1/i.test(body.reason ?? '')
+      ? `capped: "${body.reason}"`
+      : `no explicit cap - refused as "${body.reason}", so an oversized merge is indistinguishable from an invalid one and a wallet must batch by URL length`
   })
 
   await report.check('refuses a rotate with no h', async () => {

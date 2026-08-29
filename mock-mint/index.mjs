@@ -187,6 +187,23 @@ const DEFAULTS = {
   // which is the one that matters at the moment money moves: the other
   // two can be cached or stale.
   mintToHash: false,
+  // LUD-25 "Checking a note without exposing it": answer the informational
+  // GET by `?h=sha256(k1)` as well as by `?k1=`, so a wallet can look a note
+  // up without putting the live secret in a query string. Optional.
+  //   true             - compliant
+  //   'echoesK1'       - non-compliant: fills in k1, putting the secret back
+  //                      on the wire the lookup existed to keep it off
+  //   'answersUnknown' - non-compliant: answers for a hash it never
+  //                      registered, instead of the unknown-note refusal
+  hashLookup: false,
+  // LUD-25 lets a SERVICE refuse an oversized merge outright rather than
+  // let the URL be mangled upstream. 0 is no explicit cap; a positive number
+  // refuses more than that many k1 with the draft's own reason string.
+  mergeCap: 0,
+  // non-compliant: answer OK to an oversized merge whatever its inputs -
+  // what a mint that parses a truncated k1 list and shrugs looks like from
+  // outside. It has minted an output against notes it never saw.
+  acceptsOversizedMerge: false,
   // Add the optional bound LUD-21 receipt to an honestly bound quote and
   // its verify response. Requires mintToHash, verify and signatures; off
   // by default so the baseline mock remains the current LUD-25 wire.
@@ -228,10 +245,11 @@ const DEFAULTS = {
   // refuse - and MUST NOT serve verify on that fallback, where P is not
   // proof of payment but the note itself.
   commentAllowed: false,
-  // non-compliant, commentAllowed on: refuse a comment that is not a
-  // bare 32-byte hex hash instead of falling back, so an ordinary LUD-12
-  // wallet cannot pay this mint at all
-  commentRefusesMalformed: false,
+  // non-compliant, commentAllowed on: fall back to a preimage-keyed note
+  // when the comment is missing or malformed, instead of refusing. This was
+  // the draft's line 80 behaviour and is now the defect - see
+  // docs/COMMENT-IS-MANDATORY.md.
+  commentFallsBack: false,
   // non-compliant, commentAllowed on: serve LUD-21 verify even on the
   // no-comment fallback, where the preimage it hands out IS the note
   verifyOnUnnamedMint: false
@@ -461,7 +479,13 @@ export const createMockMint = async (options = {}) => {
     const origin = `http://${req.headers.host}`
 
     // ---- LUD-16 payRequest (minting) ----
-    const lnurlpMatch = url.pathname.match(/^\/\.well-known\/lnurlp\/(.+)$/)
+    // Both shapes are in the wild. A Lightning Address mint lives under
+    // /.well-known/lnurlp/<name>; an LNbits extension serves the same
+    // payRequest at a plain path with no well-known anywhere, which is the
+    // case a grader must not mistake for a missing mint address document.
+    const lnurlpMatch =
+      url.pathname.match(/^\/\.well-known\/lnurlp\/(.+)$/) ??
+      url.pathname.match(/^\/lnurlp\/(.+)$/)
     if (lnurlpMatch) {
       const user = lnurlpMatch[1]
       if (user !== opts.username && user !== '_') {
@@ -671,8 +695,8 @@ export const createMockMint = async (options = {}) => {
       let namedByComment = false
       if (opts.commentAllowed) {
         const sent = q.get('comment')
-        if (sent !== null && sent !== '') {
-          const wellFormed = /^[0-9a-f]{64}$/i.test(sent)
+        const wellFormed = sent !== null && sent !== '' && /^[0-9a-f]{64}$/i.test(sent)
+        {
           if (wellFormed) {
             const h = sent.toLowerCase()
             // Same collision rule the `h` spelling gets: an id already
@@ -685,12 +709,16 @@ export const createMockMint = async (options = {}) => {
               boundTo = h
               namedByComment = true
             }
-          } else if (opts.commentRefusesMalformed) {
-            // The non-compliant branch. LUD-25 says a comment that is not
-            // a bare hash MUST fall back, because plain LUD-12 comments
-            // are free text: refusing one turns an ordinary "thanks!"
-            // into a mint that cannot be paid.
-            return fail('Invalid comment.')
+          } else if (!opts.commentFallsBack && !boundTo) {
+            // A mint advertising comment protection requires the output to
+            // be NAMED - by either spelling. A quote nobody named can only
+            // be keyed by the payment preimage, which every routing hop
+            // learns, and which a Spark-style funding source never produces
+            // at all. `boundTo` is already set if the `h` spelling named
+            // it, so this refuses only a quote that arrived anonymous.
+            return fail(
+              'Missing or malformed comment: a hex-encoded 32-byte hashed secret is required to mint.'
+            )
           }
         }
       }
@@ -764,6 +792,31 @@ export const createMockMint = async (options = {}) => {
     // ---- LUD-03 informational GET ----
     if (url.pathname === '/w') {
       const k1 = q.get('k1')?.toLowerCase()
+      // The hash lookup. Notes are already keyed by sha256(k1) internally,
+      // so this is a second way in to a lookup the mint can always do - and
+      // `h` is only ever read here, never at the callback, where the same
+      // letter means the hash of a NEW note.
+      const asked = q.get('h')?.toLowerCase()
+      if (!k1 && asked && opts.hashLookup) {
+        if (!/^[0-9a-f]{64}$/.test(asked)) return fail('Unknown note.')
+        const held = notes.get(asked)
+        const invent = opts.hashLookup === 'answersUnknown' && !held
+        if (!invent) {
+          if (!held) return fail('Unknown note.')
+          if (held.state === 'burned') return fail('Note already spent.')
+        }
+        return send({
+          tag: 'withdrawRequest',
+          callback: `${origin}/w/cb`,
+          // k1 is omitted: a wallet asking by hash already holds the secret,
+          // which is the only way it could have computed the hash to send.
+          ...(opts.hashLookup === 'echoesK1' ? {k1: 'c'.repeat(64)} : {}),
+          minWithdrawable: 0,
+          maxWithdrawable: (held?.amountMsat ?? 21000) + opts.lieAboutValue,
+          defaultDescription: 'an LNURLcash note',
+          mintPubkey: pubkey
+        })
+      }
       if (!k1) return fail('Unknown note.')
       if (!/^[0-9a-f]{64}$/.test(k1)) return fail('Unknown note.')
       const note = notes.get(noteId(k1))
@@ -802,6 +855,8 @@ export const createMockMint = async (options = {}) => {
       const h2 = q.get('h2')
 
       if (k1s.length === 0) return fail('Missing k1.')
+      if (opts.acceptsOversizedMerge && k1s.length > 20) return send({status: 'OK'})
+      if (opts.mergeCap > 0 && k1s.length > opts.mergeCap) return fail('too many k1')
       // a repeated k1 would count one note's value twice into the output -
       // refused atomically, as the reference mint does
       if (new Set(k1s).size !== k1s.length) return fail('Invalid or already spent k1.')

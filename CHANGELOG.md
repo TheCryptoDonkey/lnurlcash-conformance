@@ -4,6 +4,53 @@ Semantic versioning. While the LUD-25 draft is unmerged, `0.x` minor bumps
 may add or tighten checks that a previously-passing mint now fails; pin an
 exact version if you gate CI on the grade.
 
+## Unreleased
+
+**Breaking: comment protection is now mandatory, ahead of the draft.** A mint
+advertising `commentAllowed >= 64` or `mintToHash` must refuse a quote that
+names no output; falling back to a preimage-keyed note - which line 80 of the
+draft still requires - is now graded as a failure. The reasoning, the cost to
+the draft's backward-compatibility claim, and what would retire the
+divergence are in `docs/COMMENT-IS-MANDATORY.md`. The mandate is about the
+output being *named*, by either spelling, not about the `comment` parameter
+specifically, and it does not apply to mints that offer no naming capability
+at all. `commentFallsBack` is kept as the fixture for the old behaviour.
+
+This fails two mints that are doing exactly what the draft asks - the LNbits
+extension and `moneyer` in its default configuration. Pin an exact version if
+you gate CI on the grade.
+
+**A mint that is not a Lightning Address is no longer failed for having no
+mint address document.** The document is probed by swapping
+`/.well-known/lnurlp/` for `/.well-known/lnurlw/` in the payRequest URL. On a
+mint served from a plain path that swap changes nothing, so the probe
+re-fetched the payRequest, read `tag: "payRequest"`, and failed the mint for
+an optional document it has nowhere to publish. Found by grading
+`bitkarrot/lnurlmint`, which is served at `/lnurlmint/lnurlp/<id>`; it now
+grades 6 passed, 0 failed on the checks that predate the mandate above.
+
+
+**Two checks for the draft's 25 August additions, both optional-graded.**
+
+`answers a note lookup by hash without the secret` covers "Checking a note
+without exposing it". The capability is detected rather than announced: the
+draft deliberately gives an unrecognized `h` the same answer an unknown
+`k1` gets, so a live note's own hash is the only probe that separates a
+mint which implements the lookup from one which never did. A mint that does
+not offer it is not graded down; one that offers it must omit `k1` from the
+reply - a wallet asking by hash already holds the secret, and filling the
+field in puts the note back on the wire the lookup exists to keep it off -
+must report the same value by hash as by `k1`, and must refuse a hash it
+never registered.
+
+`refuses an oversized merge cleanly` covers the merge cap. The cap itself
+is a MAY, so a mint that does not name one is not graded down, only
+reported, since a wallet must then batch by URL length rather than rely on
+a refusal. The one answer that fails is `OK`: every input on that probe is
+fabricated by the runner, so a mint accepting it has minted an output
+against notes it never held, which is what a truncated `k1` list read as a
+shorter merge looks like from outside.
+
 ## 0.4.0 - 2026-08-26
 
 **The mint-output naming check now reads the spelling LUD-25 actually

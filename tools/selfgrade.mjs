@@ -16,13 +16,14 @@ import {
   parseAdvertisedMintFee
 } from '../runner/index.mjs'
 
-const grade = async (mockOptions, {previousPubkeys} = {}) => {
+const grade = async (mockOptions, {previousPubkeys, payPath} = {}) => {
   const mint = await createMockMint(mockOptions)
   try {
     const k1 = bytesToHex(randomBytes(32))
     mint.state.creditNote(k1, 21_000)
     const report = createReport()
-    const pay = await gradeMint(`${mint.url}/.well-known/lnurlp/mint`, report)
+    const payUrl = payPath ? `${mint.url}${payPath}` : `${mint.url}/.well-known/lnurlp/mint`
+    const pay = await gradeMint(payUrl, report)
     const options =
       pay && typeof pay.metadata === 'string'
         ? {mintFee: parseAdvertisedMintFee(pay.metadata)}
@@ -438,23 +439,25 @@ if (statusOf(shortComment, MINT_TO_HASH_CHECK) !== 'warn') {
 }
 console.log('ok   a commentAllowed too short to hold a hash is not read as the capability')
 
-// LUD-25: a comment that is not a bare hash MUST fall back to k1=P, never
-// be refused - plain LUD-12 comments are free text, and a wallet sending
-// "thanks!" must still be able to pay.
-const refusesText = await grade({commentAllowed: 64, commentRefusesMalformed: true})
-if (statusOf(refusesText, MINT_TO_HASH_CHECK) !== 'fail') {
-  die(`a mint refusing an ordinary comment did not fail: ${statusOf(refusesText, MINT_TO_HASH_CHECK)}`)
+// SUPERSEDES the draft's line 80 - see docs/COMMENT-IS-MANDATORY.md. A mint
+// advertising comment protection MUST refuse a missing or malformed
+// comment, not fall back to keying the note by the payment preimage: a
+// preimage-keyed note is only as safe as every routing hop's honesty, and a
+// funding source that settles without a preimage at all (Spark) cannot mint
+// one. Refusing is now the compliant answer.
+const refusesText = await grade({commentAllowed: 64})
+if (statusOf(refusesText, MINT_TO_HASH_CHECK) !== 'pass') {
+  die(`a mint refusing an unnamed mint did not pass: ${detailOf(refusesText, MINT_TO_HASH_CHECK)}`)
 }
-console.log('ok   a mint refusing an ordinary LUD-12 comment caught')
+console.log('ok   a mint requiring comment protection passes')
 
-// LUD-25: in the no-comment fallback the mint MUST NOT serve verify,
-// because the preimage it hands to anyone holding the URL is not proof of
-// payment there - it is the note.
-const leakyFallback = await grade({commentAllowed: 64, verifyOnUnnamedMint: true})
-if (statusOf(leakyFallback, MINT_TO_HASH_CHECK) !== 'fail') {
-  die(`a mint serving verify on the unnamed fallback did not fail: ${statusOf(leakyFallback, MINT_TO_HASH_CHECK)}`)
+// And the inverse is now the failure: a mint that quietly issues a
+// preimage-keyed note for a quote nobody named.
+const fallsBack = await grade({commentAllowed: 64, commentFallsBack: true})
+if (statusOf(fallsBack, MINT_TO_HASH_CHECK) !== 'fail') {
+  die(`a mint falling back to a preimage-keyed note did not fail: ${statusOf(fallsBack, MINT_TO_HASH_CHECK)}`)
 }
-console.log('ok   verify served on the no-comment fallback caught')
+console.log('ok   a mint falling back to a preimage-keyed note caught')
 
 // Both spellings at once, which is what a mint that shipped mintToHash
 // first and then adopted the draft looks like.
@@ -600,3 +603,111 @@ console.log('ok   a quote sold against a live note id caught')
   }
 }
 console.log('ok   the two spellings of one output hash name one note')
+
+// ---- Checking a note without exposing it ----
+//
+// LUD-25 lets a SERVICE answer the informational GET by `?h=sha256(k1)`, so
+// a wallet can look a note up without putting the live secret in a query
+// string every proxy between it and the mint will log. Optional, so a mint
+// that does not offer it must not fail - but one that offers it wrongly
+// must be caught, because a wallet asking by hash is trusting the answer.
+const HASH_CHECK = 'answers a note lookup by hash without the secret (optional)'
+
+const silentOnHash = await grade({})
+if (statusOf(silentOnHash, HASH_CHECK) === 'fail') {
+  die('a mint not offering the hash lookup FAILED - the check is not optional')
+}
+
+const byHash = await grade({hashLookup: true})
+if (byHash.failed > 0) {
+  for (const r of byHash.results.filter(r => r.status === 'fail')) {
+    console.error(`  FAIL ${r.name} - ${r.detail}`)
+  }
+  die('a mint answering by hash correctly FAILED grading')
+}
+if (statusOf(byHash, HASH_CHECK) !== 'pass') {
+  die(`a compliant hash lookup was not graded as offered: ${statusOf(byHash, HASH_CHECK)}`)
+}
+// Both spellings of "did not fail" are a pass here, so the detail is what
+// separates a mint that answers by hash from one that never offered it.
+if (!detailOf(byHash, HASH_CHECK).includes('by hash')) {
+  die(`a compliant hash lookup was graded but not named: ${detailOf(byHash, HASH_CHECK)}`)
+}
+if (!detailOf(silentOnHash, HASH_CHECK).includes('not offered')) {
+  die(`a mint not offering the lookup was not reported as such: ${detailOf(silentOnHash, HASH_CHECK)}`)
+}
+console.log('ok   a mint answering a lookup by hash passes, and one not offering it is not graded down')
+
+// The response carries no k1. A wallet querying by hash already holds the
+// secret - the field buys nothing, and a mint that fills it in is putting
+// the note back on the wire the lookup existed to keep off it.
+const leaks = await grade({hashLookup: 'echoesK1'})
+if (!caughtBy(leaks, HASH_CHECK)) {
+  die('a mint echoing the secret back on a hash lookup PASSED - the grader is blind')
+}
+console.log('ok   a hash lookup that echoes the secret caught')
+
+// An h it never registered must get the answer an unknown k1 gets. A mint
+// answering anyway tells a wallet a note exists where none does.
+const invents = await grade({hashLookup: 'answersUnknown'})
+if (!caughtBy(invents, HASH_CHECK)) {
+  die('a mint answering for a hash it never registered PASSED - the grader is blind')
+}
+console.log('ok   a hash lookup that answers for an unregistered hash caught')
+
+// ---- the merge cap ----
+//
+// LUD-25 bounds a merge by URL length, not by the protocol, and warns that
+// past roughly 20-30 notes something upstream truncates the request -
+// turning a large merge into a malformed one rather than a clean error. A
+// SERVICE MAY refuse an oversized request outright with "too many k1". The
+// grade is informational either way; what must never happen is an OK.
+const CAP_CHECK = 'refuses an oversized merge cleanly (optional cap)'
+
+const uncapped = await grade({})
+if (statusOf(uncapped, CAP_CHECK) !== 'pass') {
+  die(`a mint without an explicit cap was graded ${statusOf(uncapped, CAP_CHECK)} - the cap is a MAY`)
+}
+if (!detailOf(uncapped, CAP_CHECK).includes('no explicit cap')) {
+  die(`an uncapped mint was not reported as such: ${detailOf(uncapped, CAP_CHECK)}`)
+}
+
+const capped = await grade({mergeCap: 20})
+if (statusOf(capped, CAP_CHECK) !== 'pass') {
+  die(`a mint capping its merges FAILED: ${detailOf(capped, CAP_CHECK)}`)
+}
+if (!detailOf(capped, CAP_CHECK).includes('too many k1')) {
+  die(`a mint naming the draft's refusal was not credited: ${detailOf(capped, CAP_CHECK)}`)
+}
+console.log('ok   an explicit merge cap is named, and its absence is not graded down')
+
+// The one outcome that is never acceptable. A truncated merge that still
+// answers OK has minted an output against inputs it never saw.
+const mints_from_nothing = await grade({acceptsOversizedMerge: true})
+if (!caughtBy(mints_from_nothing, CAP_CHECK)) {
+  die('a mint answering OK to an oversized merge of notes it never held PASSED - the grader is blind')
+}
+console.log('ok   an oversized merge answered OK caught')
+
+// ---- a mint that is not at a Lightning Address ----
+//
+// The mint address document is probed by swapping /.well-known/lnurlp/ for
+// /.well-known/lnurlw/ in the payRequest URL. On a mint served from a plain
+// path - an LNbits extension, say - that swap changes nothing, so the probe
+// re-fetches the payRequest, sees tag "payRequest", and failed the mint for
+// an optional document it was never asked to publish. Caught against
+// bitkarrot/lnurlmint, which is served at /lnurlmint/lnurlp/<id>.
+const ADDRESS_CHECK = 'publishes a mint address (experimental, optional)'
+const plainPath = await grade({}, {payPath: '/lnurlp/mint'})
+if (statusOf(plainPath, ADDRESS_CHECK) === 'fail') {
+  die(
+    `a mint not served from a Lightning Address FAILED the mint-address check: ${detailOf(plainPath, ADDRESS_CHECK)}`
+  )
+}
+if (plainPath.failed > 0) {
+  for (const r of plainPath.results.filter(r => r.status === 'fail')) {
+    console.error(`  FAIL ${r.name} - ${r.detail}`)
+  }
+  die('a mint served from a plain path failed grading')
+}
+console.log('ok   a mint not at a Lightning Address is not failed for having no mint address')
