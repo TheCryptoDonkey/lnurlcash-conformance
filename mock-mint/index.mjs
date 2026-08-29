@@ -250,6 +250,11 @@ const DEFAULTS = {
   // the draft's line 80 behaviour and is now the defect - see
   // docs/COMMENT-IS-MANDATORY.md.
   commentFallsBack: false,
+  // non-compliant, and narrower: refuse a malformed comment - an empty value
+  // included - but fall back when the key is absent entirely. That is the
+  // distinction the malformed loop cannot reach, and the commonest way to
+  // arrive unnamed, since it is what every ordinary LUD-06 wallet sends.
+  commentFallsBackWhenAbsent: false,
   // non-compliant, commentAllowed on: serve LUD-21 verify even on the
   // no-comment fallback, where the preimage it hands out IS the note
   verifyOnUnnamedMint: false
@@ -693,7 +698,10 @@ export const createMockMint = async (options = {}) => {
       // an explicit comment name the output, and deliberately NOT an
       // else-branch: a mint may ship either spelling or both.
       let namedByComment = false
-      if (opts.commentAllowed) {
+      // >= 64, the same threshold the runner reads the capability at: a
+      // commentAllowed too short to carry a 32-byte hash is not this
+      // capability, so nothing about it may be required either.
+      if (opts.commentAllowed >= 64) {
         const sent = q.get('comment')
         const wellFormed = sent !== null && sent !== '' && /^[0-9a-f]{64}$/i.test(sent)
         {
@@ -709,7 +717,11 @@ export const createMockMint = async (options = {}) => {
               boundTo = h
               namedByComment = true
             }
-          } else if (!opts.commentFallsBack && !boundTo) {
+          } else if (
+            !opts.commentFallsBack &&
+            !(opts.commentFallsBackWhenAbsent && sent === null) &&
+            !boundTo
+          ) {
             // A mint advertising comment protection requires the output to
             // be NAMED - by either spelling. A quote nobody named can only
             // be keyed by the payment preimage, which every routing hop
@@ -739,7 +751,11 @@ export const createMockMint = async (options = {}) => {
       // spelling must withhold verify from quotes that used it. A mock
       // that never heard of the comment spelling keeps answering exactly
       // as it always did.
-      const verifySafe = !opts.commentAllowed || namedByComment || opts.verifyOnUnnamedMint
+      // Named by EITHER spelling, at the same >= 64 threshold the capability
+      // is read at: withholding verify from a quote bound via `h` would
+      // contradict the rule that either spelling names the output.
+      const verifySafe =
+        !(opts.commentAllowed >= 64) || Boolean(boundTo) || opts.verifyOnUnnamedMint
       if (opts.verify && verifySafe) body.verify = `${origin}/verify/${paymentHash}`
       // Appended last, and only when the quote really was bound, so a
       // mock that was never told about any of this answers byte for byte

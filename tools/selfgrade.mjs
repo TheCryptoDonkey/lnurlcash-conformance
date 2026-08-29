@@ -437,6 +437,16 @@ const shortComment = await grade({commentAllowed: 32})
 if (statusOf(shortComment, MINT_TO_HASH_CHECK) !== 'warn') {
   die(`commentAllowed of 32 was read as the naming capability: ${statusOf(shortComment, MINT_TO_HASH_CHECK)}`)
 }
+// ...and it is not read as the MANDATE either. A commentAllowed too short to
+// hold a hash is not this capability, so nothing about it may be required:
+// grading the check alone missed a mock that enforced the mandate at 32 and
+// failed an unrelated check for it.
+if (shortComment.failed > 0) {
+  for (const r of shortComment.results.filter(r => r.status === 'fail')) {
+    console.error(`  FAIL ${r.name} - ${r.detail}`)
+  }
+  die('a commentAllowed of 32 had the comment mandate enforced against it')
+}
 console.log('ok   a commentAllowed too short to hold a hash is not read as the capability')
 
 // SUPERSEDES the draft's line 80 - see docs/COMMENT-IS-MANDATORY.md. A mint
@@ -711,3 +721,13 @@ if (plainPath.failed > 0) {
   die('a mint served from a plain path failed grading')
 }
 console.log('ok   a mint not at a Lightning Address is not failed for having no mint address')
+
+// The absent case, separately from the malformed one. A mint may refuse a
+// comment it cannot parse and still quietly mint a preimage-keyed note when
+// none was sent at all - which is the commonest way to arrive unnamed, since
+// it is what every ordinary LUD-06 wallet sends.
+const absentOnly = await grade({commentAllowed: 64, commentFallsBackWhenAbsent: true})
+if (!caughtBy(absentOnly, MINT_TO_HASH_CHECK)) {
+  die('a mint falling back only when no comment was sent PASSED - the grader is blind')
+}
+console.log('ok   a mint falling back when no comment was sent at all caught')
