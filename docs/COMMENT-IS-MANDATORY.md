@@ -73,13 +73,26 @@ a note secret through. dni's test asserts exactly that shape.
 | --- | --- | --- |
 | LUD-25 draft, line 80 | MUST fall back to `k1=P` | - |
 | `dni/lnurl-mint` `b257d58` | rejected outright | this suite |
-| `bitkarrot/lnurlmint` | falls back | the draft |
+| `bitkarrot/lnurlmint` | falls back | `lnurl-mint` as of 27 Aug |
 | `moneyer` (default) | falls back | the draft |
 | `moneyer` (`REQUIRE_COMMENT=1`) | rejected outright | this suite |
 
 The reference mint's commit predates any spec change: it landed 2026-08-28,
 two days after the draft was last touched, with no accompanying PR comment.
 The reading taken here is that the mint leads and the draft will follow.
+
+Worth being exact about that third row, because it is easy to read as
+independent corroboration of the draft and is not. The LNbits extension is
+built from `lnurl-mint` at `5a4603d` (27 Aug), which carries dni's comment
+feature (#24) but predates the mandate (`b257d58`, 28 Aug) by a day. It falls
+back because that is what dni's own code did when it was forked, not because
+anyone weighed the draft's rule and chose it. Its author has said the
+extension is experimental, not yet tested end to end, and that the spec review
+comes after a WASM LNbits port.
+
+So no implementation has independently chosen the fallback. Every mint that
+still has it is either dni's pre-28-August code, a fork of it, or moneyer -
+where it is now behind a flag.
 
 ## What this costs, and what it does not
 
