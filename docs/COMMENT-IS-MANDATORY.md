@@ -43,6 +43,30 @@ payment completes with no preimage. There is nothing to key the fallback
 note by. A mint on such a backend cannot implement line 80 as written - not
 because it declines to, but because the value the rule names does not exist.
 
+## The reference behaviour, checked rather than inferred
+
+The rules above were first read off `router.py`. They have since been checked
+against the reference mint's own tests (`tests/test_comment_protection.py` at
+`b257d58`), because a suite grading an inferred model of an implementation is
+worse than one grading nothing:
+
+| what this suite requires | dni's test |
+| --- | --- |
+| absent `comment` refused | `test_missing_comment_is_rejected` |
+| malformed `comment` refused | `test_malformed_comment_is_rejected` |
+| capability always advertised | `commentAllowed: int = 64`, a fixed model field |
+| `verify` served on a named quote | `test_verify_advertised_whenever_verify_is_enabled` |
+
+One check here is stricter than anything dni asserts: this suite requires the
+refusal to arrive with no `pr`, so a wallet cannot pay for a quote the mint
+was always going to reject. `get_pay_callback` does raise before
+`create_invoice`, so the reference satisfies it - but nothing in his tests
+pins that ordering, and a refactor could lose it silently.
+
+The old `verify`-on-fallback prohibition is not merely unenforced here, it is
+unreachable: with no fallback there is no unnamed quote for `verify` to leak
+a note secret through. dni's test asserts exactly that shape.
+
 ## Who does what, as of 2026-08-29
 
 | implementation | unnamed quote | agrees with |
