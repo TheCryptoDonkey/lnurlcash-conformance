@@ -6,6 +6,8 @@ exact version if you gate CI on the grade.
 
 ## Unreleased
 
+## 0.5.0 - 2026-08-31
+
 **Breaking: the current LUD-25 draft's mandatory mint comment is now the
 baseline.** Every minting payRequest must advertise `commentAllowed >= 64`,
 and every quote must carry `comment=hex(sha256(secret))`; missing or malformed
