@@ -6,19 +6,17 @@ exact version if you gate CI on the grade.
 
 ## Unreleased
 
-**Breaking: comment protection is now mandatory, ahead of the draft.** A mint
-advertising `commentAllowed >= 64` or `mintToHash` must refuse a quote that
-names no output; falling back to a preimage-keyed note - which line 80 of the
-draft still requires - is now graded as a failure. The reasoning, the cost to
-the draft's backward-compatibility claim, and what would retire the
-divergence are in `docs/COMMENT-IS-MANDATORY.md`. The mandate is about the
-output being *named*, by either spelling, not about the `comment` parameter
-specifically, and it does not apply to mints that offer no naming capability
-at all. `commentFallsBack` is kept as the fixture for the old behaviour.
-
-This fails two mints that are doing exactly what the draft asks - the LNbits
-extension and `moneyer` in its default configuration. Pin an exact version if
-you gate CI on the grade.
+**Breaking: the current LUD-25 draft's mandatory mint comment is now the
+baseline.** Every minting payRequest must advertise `commentAllowed >= 64`,
+and every quote must carry `comment=hex(sha256(secret))`; missing or malformed
+comments are refused before invoice creation. The payment preimage is
+settlement proof and never a bearer credential. `mintToHash`/`h` remains an
+additive ForgeSworn compatibility and receipt extension: when used, `h` must
+repeat the mandatory comment and cannot replace it. The mock, runner,
+lifecycle and pay-request vectors all enforce the same rule, including a
+mismatched `h`/`comment` refusal. `commentFallsBack` remains only as the
+non-compliant historical fixture documented in
+`docs/COMMENT-IS-MANDATORY.md`.
 
 **A mint that is not a Lightning Address is no longer failed for having no
 mint address document.** The document is probed by swapping

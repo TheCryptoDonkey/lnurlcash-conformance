@@ -347,18 +347,18 @@ check('every mint-to-hash case follows the declared rule', () => {
     )
     const expected =
       c.h === null
-        ? 'unbound'
+        ? 'comment-only'
         : !wellFormed
           ? 'malformed-h'
           : inUse.includes(compared)
             ? 'collision'
-            : 'bound'
+            : 'extension-bound'
     assert(expected === c.outcome, `${c.name}: the rule gives ${expected}, not ${c.outcome}`)
     const refused = c.outcome === 'malformed-h' || c.outcome === 'collision'
     assert(c.invoiced === !refused, `${c.name}: invoiced does not follow the outcome`)
     // the pay callback's own response says whether THIS quote was bound,
     // so it is true exactly when the note will land at h
-    assert(c.echo === (c.outcome === 'bound'), `${c.name}: the quote echo does not follow the outcome`)
+    assert(c.echo === (c.outcome === 'extension-bound'), `${c.name}: the quote echo does not follow the outcome`)
     if (refused) {
       assert(c.noteId === null, `${c.name}: a refusal names a note id`)
       const reason =
@@ -366,8 +366,12 @@ check('every mint-to-hash case follows the declared rule', () => {
       assert(c.reason === reason, `${c.name}: reason was ${JSON.stringify(c.reason)}`)
     } else {
       assert(c.reason === null, `${c.name}: an issued quote carries a refusal reason`)
-      const landsAt = c.outcome === 'bound' ? compared : mintToHash.settlement.paymentHash
+      const landsAt = c.outcome === 'extension-bound' ? compared : mintToHash.settlement.comment
       assert(c.noteId === landsAt, `${c.name}: the note lands at ${c.noteId}`)
+      assert(/^[0-9a-f]{64}$/.test(c.comment), `${c.name}: mandatory comment is not 64 lowercase hex`)
+      if (c.outcome === 'extension-bound') {
+        assert(c.comment === compared, `${c.name}: h and comment name different outputs`)
+      }
     }
   }
 })
@@ -432,7 +436,7 @@ check('the two spellings of one hash name one output', () => {
     )
   }
   assert(
-    upper.some(c => c.outcome === 'bound'),
+    upper.some(c => c.outcome === 'extension-bound'),
     'no upper-case case binds, so nothing states that the spellings are one output'
   )
   assert(
@@ -444,14 +448,15 @@ check('the two spellings of one hash name one output', () => {
 check('the worked settlement recomputes from its own secrets', () => {
   const s = mintToHash.settlement
   assert(s.h === noteId(s.walletSecret), 'h is not the sha256 of the wallet secret')
+  assert(s.comment === s.h, 'the extension h differs from the mandatory comment')
   assert(s.paymentHash === noteId(s.preimage), 'paymentHash is not the sha256 of the preimage')
   assert(s.walletSecret !== s.preimage, 'the two secrets are the same value')
-  assert(s.bound.noteId === s.h, 'a bound note does not land at h')
-  assert(s.bound.k1 === s.walletSecret, 'a bound note is not opened by the wallet secret')
-  assert(s.bound.preimageIsAValidK1 === false, 'the preimage still opens a bound note')
-  assert(s.unbound.noteId === s.paymentHash, 'an unbound note does not land at the payment hash')
-  assert(s.unbound.k1 === s.preimage, 'an unbound note is not opened by the preimage')
-  assert(s.unbound.preimageIsAValidK1 === true, 'the preimage does not open an unbound note')
+  assert(s.extensionBound.noteId === s.h, 'an extension-bound note does not land at h')
+  assert(s.extensionBound.k1 === s.walletSecret, 'an extension-bound note is not opened by the wallet secret')
+  assert(s.extensionBound.preimageIsAValidK1 === false, 'the preimage still opens an extension-bound note')
+  assert(s.commentOnly.noteId === s.comment, 'a comment-only note does not land at the commitment')
+  assert(s.commentOnly.k1 === s.walletSecret, 'a comment-only note is not opened by the wallet secret')
+  assert(s.commentOnly.preimageIsAValidK1 === false, 'the preimage opens a comment-only note')
 })
 
 check('the optional bound receipt is tied to the quote and authenticates the note', () => {
@@ -891,6 +896,7 @@ for (const name of ['withdraw-info.json', 'pay-request.json']) {
     const groups = [
       [v.accepted, v.rejected],
       [v.invoice?.accepted, v.invoice?.rejected],
+      [v.mintCallback?.accepted, v.mintCallback?.rejected],
       [v.verify?.accepted, v.verify?.rejected]
     ].filter(([a]) => a)
     for (const [accepted, rejected] of groups) {
@@ -904,9 +910,31 @@ for (const name of ['withdraw-info.json', 'pay-request.json']) {
 }
 
 check('pay-request.json covers both legal withdrawLink spellings', () => {
-  const links = load('pay-request.json').accepted.map(c => c.withdrawLink).filter(Boolean)
+  const pay = load('pay-request.json')
+  const links = pay.accepted.map(c => c.withdrawLink).filter(Boolean)
   assert(links.some(l => /^lnurlw:\/\//.test(l)), 'no lnurlw:// withdrawLink case')
   assert(links.some(l => /^https:\/\//.test(l)), 'no plain https:// withdrawLink case')
+})
+
+check('every minting payRequest requires a 64-character hash comment', () => {
+  const pay = load('pay-request.json')
+  const minting = pay.accepted.filter(c => c.withdrawLink)
+  assert(minting.length > 0, 'no accepted minting payRequest')
+  for (const c of minting) {
+    assert(c.body.commentAllowed === 64, `${c.name}: body does not advertise commentAllowed 64`)
+    assert(c.commentAllowed === 64, `${c.name}: parsed expectation is not commentAllowed 64`)
+  }
+  assert(
+    pay.rejected.some(c => c.body.withdrawLink && c.body.commentAllowed === undefined),
+    'no rejected minting payRequest omits commentAllowed'
+  )
+  const accepted = pay.mintCallback.accepted.find(c => c.result === 'invoice')
+  assert(/^[0-9a-f]{64}$/.test(accepted.comment), 'accepted mint comment is not 64 lowercase hex')
+  assert(accepted.noteId === accepted.comment, 'accepted mint does not land at the committed hash')
+  assert(accepted.paymentPreimageIsBearerK1 === false, 'payment preimage still opens the minted note')
+  for (const c of pay.mintCallback.rejected) {
+    assert(c.result === 'error-before-invoice', `${c.name}: rejection happens after invoicing`)
+  }
 })
 
 // ---- lifecycle ----

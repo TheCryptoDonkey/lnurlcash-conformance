@@ -1,17 +1,17 @@
 {
   "version": 1,
-  "spec": "LUD-06, LUD-21, LUD-25",
-  "description": "Naming the note you are buying. A WALLET MAY add `h` to the LUD-06 pay callback when minting: the sha256 of a secret it chose, 32 bytes as 64 lowercase hex, exactly what `h` means on the withdraw callback. The SERVICE then credits the minted note at that id on settlement, and the payment preimage is NOT a valid k1 for it. That is the whole point: in LUD-25 a minted note's k1 is the payment preimage, so the preimage is the money, and two sets of people learn it without being trusted with it - every routing node on the payment path, and anyone who merely saw the invoice and polled LUD-21 verify with its payment hash. Without `h` nothing changes and the preimage is still the secret, so this is purely additive: a SERVICE that has not implemented it is not broken, it simply does not offer the capability. This file fixes the parameter name, what counts as well-formed, and both refusal reasons, so implementations in different languages answer the same wallet the same way.",
+  "spec": "LUD-06, LUD-21, LUD-25 plus ForgeSworn mintToHash extension",
+  "description": "ForgeSworn compatibility profile layered on current LUD-25 minting. The normative output commitment is always `comment=hex(sha256(secret))`. A WALLET MAY repeat that same 64-hex hash as `h` for services and sealed-signer receipts that shipped before the comment spelling. `h` never replaces comment; if present it must be well formed and identify the same output. With or without the extension, the payment preimage is settlement proof and never a valid bearer k1.",
   "parameter": {
     "name": "h",
-    "on": "the LUD-06 pay callback, alongside amount",
-    "value": "sha256 of a WALLET-chosen secret, 32 bytes as 64 lowercase hex",
+    "on": "the LUD-06 pay callback, alongside amount and the mandatory identical comment",
+    "value": "the same sha256 commitment already carried in comment, 32 bytes as 64 lowercase hex",
     "optional": true,
-    "absent": "today's behaviour, unchanged: the note is credited at the payment hash and its k1 is the payment preimage"
+    "absent": "current LUD-25 behaviour: comment alone names the wallet-generated bearer secret"
   },
   "caseRule": {
-    "wallet": "A WALLET MUST send `h` as 64 lowercase hex. Strict on the producer side costs nothing and is what every implementation here does.",
-    "service": "A SERVICE SHOULD normalise case before comparing, and MUST NOT treat an otherwise well-formed upper-case `h` as a different output from its lowercase form. Hex is case-insensitive: both spellings are the same 32 bytes, so they name one output, not two.",
+    "wallet": "A WALLET using this extension MUST send the same commitment in `comment` and `h`, each as 64 lowercase hex.",
+    "service": "A SERVICE MUST require the normative comment, SHOULD normalise hex case before comparing, MUST reject a mismatched h, and MUST NOT treat upper- and lower-case spellings as different outputs.",
     "whyItMatters": "A SERVICE that keys the string it was handed files the note under the upper-case spelling, and then cannot find it when the wallet asks the withdraw endpoint for its own lowercase secret. The money is not stolen, it is simply lost, and nobody is told. A SERVICE that instead refuses an upper-case `h` outright is being strict rather than wrong, and loses nobody anything - the wallet learns before it pays.",
     "comparedAs": "Every case below carries `comparedAs`: the value a SERVICE compares and keys by, which is `h` lowercased, or null when `h` is absent or malformed."
   },
@@ -46,8 +46,8 @@
     "collision": "Invalid or already spent k1."
   },
   "outcomes": {
-    "bound": "an invoice is issued carrying `mintToHash: true`, and on settlement the note is credited at `comparedAs` - `h` lowercased, which for a WALLET following the rule is `h` itself. The payment preimage names nothing",
-    "unbound": "no `h` was sent: an invoice is issued and on settlement the note is credited at the payment hash, whose k1 is the payment preimage",
+    "extension-bound": "comment and h name the same output; an invoice is issued carrying `mintToHash: true`, and settlement credits that committed hash. The payment preimage names nothing",
+    "comment-only": "no h was sent: the mandatory comment still names the output, and the payment preimage names nothing",
     "malformed-h": "not 32 bytes of hex in any casing: refused before any invoice exists, so a wallet never pays for a quote the SERVICE was always going to reject",
     "collision": "refused before any invoice exists, with the same reason a colliding output hash gets on the withdraw callback, so a probe learns nothing about which ids exist"
   },
@@ -61,21 +61,23 @@
     {
       "name": "no h at all",
       "amountMsat": 21000,
+      "comment": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
       "h": null,
       "comparedAs": null,
-      "outcome": "unbound",
+      "outcome": "comment-only",
       "invoiced": true,
       "echo": false,
-      "noteId": "e802086ad6a1e16b78352ad7296d2aabd835b1b16dbe951e1135b97c68e29d81",
+      "noteId": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
       "reason": null,
-      "why": "the LUD-25 flow as it stands: nothing here is a change"
+      "why": "the current LUD-25 flow: the mandatory comment names the output without the extension"
     },
     {
       "name": "a well-formed h",
       "amountMsat": 21000,
+      "comment": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
       "h": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
       "comparedAs": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
-      "outcome": "bound",
+      "outcome": "extension-bound",
       "invoiced": true,
       "echo": true,
       "noteId": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
@@ -84,6 +86,7 @@
     {
       "name": "an h that is not hex",
       "amountMsat": 21000,
+      "comment": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
       "h": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
       "comparedAs": null,
       "outcome": "malformed-h",
@@ -96,6 +99,7 @@
     {
       "name": "an h one character short",
       "amountMsat": 21000,
+      "comment": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
       "h": "000000000000000000000000000000000000000000000000000000000000000",
       "comparedAs": null,
       "outcome": "malformed-h",
@@ -107,6 +111,7 @@
     {
       "name": "an h one character long",
       "amountMsat": 21000,
+      "comment": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
       "h": "00000000000000000000000000000000000000000000000000000000000000000",
       "comparedAs": null,
       "outcome": "malformed-h",
@@ -118,6 +123,7 @@
     {
       "name": "an empty h",
       "amountMsat": 21000,
+      "comment": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
       "h": "",
       "comparedAs": null,
       "outcome": "malformed-h",
@@ -130,9 +136,10 @@
     {
       "name": "an h in upper case hex",
       "amountMsat": 21000,
+      "comment": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
       "h": "F849D67325FACF04177BC663B2DC544051831C589EF581D412F2EBA44834E77C",
       "comparedAs": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
-      "outcome": "bound",
+      "outcome": "extension-bound",
       "invoiced": true,
       "echo": true,
       "noteId": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
@@ -142,6 +149,7 @@
     {
       "name": "an h that already names a note",
       "amountMsat": 21000,
+      "comment": "e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e",
       "h": "e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e",
       "comparedAs": "e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e",
       "outcome": "collision",
@@ -154,6 +162,7 @@
     {
       "name": "an h in upper case hex that already names a note",
       "amountMsat": 21000,
+      "comment": "e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e",
       "h": "E0E77A507412B120F6EDE61F62295B1A7B2FF19D3DCC8F7253E51663470C888E",
       "comparedAs": "e0e77a507412b120f6ede61f62295b1a7b2ff19d3dcc8f7253e51663470c888e",
       "outcome": "collision",
@@ -166,6 +175,7 @@
     {
       "name": "an h that already names an invoice this SERVICE issued",
       "amountMsat": 21000,
+      "comment": "4bb06f8e4e3a7715d201d573d0aa423762e55dabd61a2c02278fa56cc6d294e0",
       "h": "4bb06f8e4e3a7715d201d573d0aa423762e55dabd61a2c02278fa56cc6d294e0",
       "comparedAs": "4bb06f8e4e3a7715d201d573d0aa423762e55dabd61a2c02278fa56cc6d294e0",
       "outcome": "collision",
@@ -178,6 +188,7 @@
     {
       "name": "an h another quote is already waiting to credit",
       "amountMsat": 21000,
+      "comment": "2578ccf8645b2d1dc10c465eff843585970f3a7e22296a92cad55d489a272072",
       "h": "2578ccf8645b2d1dc10c465eff843585970f3a7e22296a92cad55d489a272072",
       "comparedAs": "2578ccf8645b2d1dc10c465eff843585970f3a7e22296a92cad55d489a272072",
       "outcome": "collision",
@@ -191,20 +202,21 @@
   "settlement": {
     "description": "One worked settlement, both ways round, so an implementation can check where the note landed rather than only that an invoice came back.",
     "walletSecret": "0505050505050505050505050505050505050505050505050505050505050505",
+    "comment": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
     "h": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
     "preimage": "0606060606060606060606060606060606060606060606060606060606060606",
     "paymentHash": "e802086ad6a1e16b78352ad7296d2aabd835b1b16dbe951e1135b97c68e29d81",
-    "bound": {
+    "extensionBound": {
       "noteId": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
       "k1": "0505050505050505050505050505050505050505050505050505050505050505",
       "preimageIsAValidK1": false,
       "note": "a software wallet can claim by asking the withdraw endpoint for its own secret directly. A sealed signer that will not export that secret instead uses the optional bound receipt below to confirm the note without revealing k1"
     },
-    "unbound": {
-      "noteId": "e802086ad6a1e16b78352ad7296d2aabd835b1b16dbe951e1135b97c68e29d81",
-      "k1": "0606060606060606060606060606060606060606060606060606060606060606",
-      "preimageIsAValidK1": true,
-      "note": "the wallet must poll verify for the preimage, and rotate the instant it has it"
+    "commentOnly": {
+      "noteId": "f849d67325facf04177bc663b2dc544051831c589ef581d412f2eba44834e77c",
+      "k1": "0505050505050505050505050505050505050505050505050505050505050505",
+      "preimageIsAValidK1": false,
+      "note": "without h, the mandatory comment still binds the freshly minted note to the wallet secret"
     }
   },
   "receipt": {
@@ -214,6 +226,7 @@
     "keyEstablishment": {
       "rule": "The WALLET must know the receipt verification key before it pays: recover the signing node identity from the BOLT-11 invoice, or read mintPubkey from the payRequest under the wallet's existing trust/pinning policy.",
       "payRequest": {
+        "commentAllowed": 64,
         "mintToHash": true,
         "mintPubkey": "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa"
       }
@@ -257,7 +270,7 @@
       "A WALLET that requires a receipt MUST refuse to show or pay an invoice unless quote.mintToHash is exactly true and quote.mint matches the h it requested and the exact amount it expects to receive.",
       "Before accepting settlement, it MUST match verify.pr to quote.pr, match verify.mint.h and verify.mint.amount to the quote commitment, require settled to be exactly true, and verify mint.sig with the mint public key and its locally held k1.",
       "A SERVICE MUST NOT return mint.sig before settlement. An unsettled response MAY repeat h and amount so a wallet can diagnose a mismatch, but that repetition is not a receipt.",
-      "Absence of quote.mint means the optional receipt is not offered. A software wallet can still use mintToHash and claim with its own k1; a sealed signer falls back before payment to the legacy preimage-and-rotate flow."
+      "Absence of quote.mint means the optional receipt is not offered. A software wallet still claims the comment-bound note with its own k1; a sealed signer must use another authenticated confirmation path or decline before payment."
     ],
     "invalid": [
       {
@@ -328,6 +341,7 @@
         "minSendable": 1000,
         "maxSendable": 100000000,
         "metadata": "[[\"text/plain\",\"a mint\"]]",
+        "commentAllowed": 64,
         "withdrawLink": "https://mint.example/w",
         "mintToHash": true
       },
@@ -342,6 +356,7 @@
         "minSendable": 1000,
         "maxSendable": 100000000,
         "metadata": "[[\"text/plain\",\"a mint\"]]",
+        "commentAllowed": 64,
         "withdrawLink": "https://mint.example/w"
       },
       "offered": false,
@@ -356,6 +371,7 @@
         "minSendable": 1000,
         "maxSendable": 100000000,
         "metadata": "[[\"text/plain\",\"a mint\"]]",
+        "commentAllowed": 64,
         "withdrawLink": "https://mint.example/w",
         "mintToHash": false
       },
@@ -370,6 +386,7 @@
         "minSendable": 1000,
         "maxSendable": 100000000,
         "metadata": "[[\"text/plain\",\"a mint\"]]",
+        "commentAllowed": 64,
         "withdrawLink": "https://mint.example/w",
         "mintToHash": "true"
       },
@@ -385,6 +402,7 @@
         "minSendable": 1000,
         "maxSendable": 100000000,
         "metadata": "[[\"text/plain\",\"a mint\"]]",
+        "commentAllowed": 64,
         "withdrawLink": "https://mint.example/w",
         "mintToHash": 1
       },
@@ -521,29 +539,29 @@
   "contradictions": [
     {
       "name": "claims the capability and does not bind",
-      "what": "any of the three says `mintToHash: true`, and the minted note is still opened by the payment preimage",
+      "what": "any of the three says `mintToHash: true`, but the service ignores h or lets it disagree with the mandatory comment",
       "verdict": "broken",
-      "why": "the wallet was told it need not race the preimage, so it did not. The quote echo is the worst version of it, because the wallet was told at the very moment it decided to pay."
+      "why": "the extension claim is false and any receipt commitment may authenticate a different output from the mandatory comment."
     },
     {
       "name": "binds and says nothing on the quote",
       "what": "the payRequest advertises it, the quote carries `h`, and the response omits `mintToHash`",
       "verdict": "safe but unconfirmable",
-      "why": "a wallet reading a missing field as false falls back to the preimage flow, which is safe. It simply cannot confirm at the one moment confirmation is worth anything."
+      "why": "the comment-bound note remains safe, but the wallet cannot rely on extension-specific receipt semantics for this quote."
     },
     {
       "name": "says nothing anywhere and ignores `h`",
-      "what": "no advertisement, no echo, and the note is the preimage's",
+      "what": "no extension advertisement or echo; the mandatory comment still names the note",
       "verdict": "not implemented",
-      "why": "every mint today. Nothing about this is a defect."
+      "why": "the additive extension is absent; current LUD-25 comment minting remains fully implemented."
     }
   ],
   "walletRules": [
-    "A WALLET MUST persist its chosen secret BEFORE asking for the invoice. Paying and then losing the secret is the one way this makes things worse than the preimage scheme, and persisting first removes it.",
-    "A WALLET MUST send `h` as 64 lowercase hex. A SERVICE SHOULD normalise case before comparing and MUST NOT read the two spellings as two outputs, but a wallet that leans on that will meet a SERVICE that refuses upper case outright.",
-    "A WALLET MUST decide from the payRequest, which every SERVICE publishes, rather than from the experimental mint address document, which many do not. A SERVICE that does not advertise `mintToHash` ignores `h`, and the note it mints is the preimage's.",
-    "A WALLET MUST check the pay callback's own `mintToHash` before it pays. The other two advertisements can be cached or stale; that one is this quote, now. Absent means not bound, so claim the preimage way and rotate on sight.",
-    "Against a SERVICE that advertises mintToHash, a software WALLET needs no verify poll to claim: it knows its own secret, so it asks the withdraw endpoint for it directly. A sealed signer that will not export k1 MAY require the optional bound receipt and use verify only as authenticated settlement evidence.",
-    "A note minted at a WALLET-chosen hash is the WALLET's from birth. A wallet deriving its secrets from a seed can restore that note from the seed alone, which a preimage-secret note can never be."
+    "A WALLET MUST persist its chosen secret BEFORE asking for the invoice, then send its hash in the mandatory comment.",
+    "A WALLET using the extension MUST repeat that same hash as 64 lowercase hex in h; it MUST NOT send two different output commitments.",
+    "A WALLET decides whether the additive h and receipt fields are supported from mintToHash on the payRequest; absence affects only the extension, never the mandatory comment-bound note.",
+    "A WALLET requiring a bound receipt MUST check the pay callback's own mintToHash and mint commitment before paying. If absent, it declines or uses another authenticated confirmation path; it never falls back to a preimage-backed mint.",
+    "A software WALLET needs no verify preimage to claim a comment-bound note: it already knows its secret. A sealed signer MAY require the optional receipt and use verify as authenticated settlement evidence.",
+    "A comment-bound note belongs to the WALLET from birth. Seed-derived secrets make it recoverable without relying on payment history."
   ]
 }

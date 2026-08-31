@@ -137,14 +137,10 @@ export interface MockMintOptions {
   /** what the node behind a stats-publishing mock claims to hold */
   localBalanceMsat?: number
   /**
-   * Let a WALLET name the note it is buying. Off, and nothing about it
-   * reaches the wire: nothing is advertised anywhere and the pay callback
-   * does not read `h` at all. On, the callback takes an optional `h` - 64
-   * lowercase hex, the sha256 of a secret the wallet chose, the same
-   * thing `h` means on the withdraw callback - and credits the note at
-   * that id when the invoice settles. The payment preimage is then not a
-   * valid k1 for that note, which matters because every routing node on
-   * the payment path learns it, and so does anyone who saw the invoice.
+   * Additive compatibility spelling for the mandatory mint comment. Off,
+   * `h` is not advertised or read, while comment-bound minting remains the
+   * baseline. On, WALLET may repeat the same 64-hex output commitment as
+   * `h`, enabling the ForgeSworn/Moneyer quote and receipt vocabulary.
    *
    * The capability is advertised in three places: `mintToHash: true` on
    * the payRequest (every mint has one, so it is what a wallet decides
@@ -176,11 +172,9 @@ export interface MockMintOptions {
    */
   mintToHashAcceptsUsedH?: boolean
   /**
-   * non-compliant, mintToHash on: advertise the capability, echo it back
-   * on the quote, and credit the note at the payment hash anyway - the
-   * preimage is still the money and the wallet's own secret names
-   * nothing. The wallet stopped rotating on sight because it was told it
-   * did not need to, so this is the worst of both schemes.
+   * non-compliant, mintToHash on: accept `h` and mandatory `comment` even
+   * when they name different outputs. The normative comment still binds
+   * the note, but the extension claim and any h-watching signer disagree.
    */
   mintToHashIgnoresH?: boolean
   /**

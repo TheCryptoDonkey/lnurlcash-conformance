@@ -1,6 +1,6 @@
 # Bound mint settlement receipts
 
-Status: additive implementation proposal for eventual LUD-25 adoption.
+Status: additive implementation proposal layered on current LUD-25 comment-bound minting.
 
 This document records the wire contract implemented by the ForgeSworn /
 TheCryptoDonkey repositories. It does not modify the upstream LUD-25 draft or
@@ -8,32 +8,32 @@ dni's reference repositories.
 
 ## Why the receipt exists
 
-`mintToHash` lets a wallet choose `k1`, send only `h = sha256(k1)` on the
-LUD-06 pay callback, and keep the payment preimage from becoming the bearer
-secret. A software wallet can claim by probing the withdraw endpoint with its
-own `k1`.
+Current LUD-25 already lets a wallet choose `k1`: it sends
+`comment = sha256(k1)` on the LUD-06 pay callback, and the payment preimage
+never becomes the bearer secret. The `mintToHash` extension repeats that same
+commitment as `h` so older Moneyer/ForgeSworn clients and the receipt fields
+share one explicit output identifier. It never replaces the comment.
 
 A sealed signer should not export `k1` merely so a browser can perform that
 probe. It needs authenticated evidence that the invoice settled and the mint
 created the exact output quoted before payment. The existing LUD-21 response
 is the natural place for that evidence.
 
-## Candidate normative text for LUD-25
+## Candidate extension text
 
 The following is intended to be transplantable into the draft's “Minting a
 bearer note from a `payRequest`” section.
 
-A `SERVICE` that supports wallet-chosen mint outputs MAY add
-`"mintToHash": true` to its `payRequest`. A `WALLET` MAY then add
-`h=<hex sha256>` to the pay callback, where `h` is the SHA-256 of a fresh
-32-byte secret generated and persisted by `WALLET`. `WALLET` MUST send 64
-lowercase hexadecimal characters. `SERVICE` MUST reject a malformed `h`, or
-an `h` already used by an outstanding note, invoice or unsettled quote,
-before returning an invoice. Without `h`, all existing minting behaviour is
-unchanged.
+A `SERVICE` that supports the receipt extension MAY add `"mintToHash": true`
+to its `payRequest`. A `WALLET` MAY then repeat its mandatory LUD-25 comment
+as `h=<hex sha256>` on the pay callback. `WALLET` MUST send the same 64
+lowercase hexadecimal characters in both fields. `SERVICE` MUST reject a
+missing or malformed comment, a malformed or mismatched `h`, or an output
+already used by an outstanding note, invoice or unsettled quote, before
+returning an invoice. Without `h`, comment-bound LUD-25 minting is unchanged.
 
-When it accepts `h`, `SERVICE` credits the new note at `h` when the invoice
-settles instead of crediting it at the invoice payment hash, and returns
+When it accepts `h`, `SERVICE` credits the new note at the identical comment
+commitment when the invoice settles and returns
 `"mintToHash": true` on that pay callback response. The payment preimage
 remains a LUD-21 proof of payment and is not a valid `k1` for the bound note.
 A `WALLET` MUST NOT assume the binding from the request alone.
@@ -66,7 +66,7 @@ confirmed.
 A wallet persists or stages `k1` first, computes lowercase `h`, and requests:
 
 ```text
-GET <pay-callback>?amount=<gross-msat>&h=<h>
+GET <pay-callback>?amount=<gross-msat>&comment=<h>&h=<h>
 ```
 
 A receipt-capable service returns the existing fields plus `mint`:
@@ -140,12 +140,12 @@ sealed signer can then transition its staged output from `PENDING` to
 
 | Wallet | Service | Behaviour |
 | --- | --- | --- |
-| New software wallet | Receipt-capable service | Bound quote and receipt; wallet keeps its chosen `k1`. |
+| New software wallet | Receipt-capable service | Comment-bound quote and optional receipt; wallet keeps its chosen `k1`. |
 | New sealed signer | Receipt-capable service | `PENDING` to `CONFIRMED` from the signed receipt; no export or preimage import. |
-| New software wallet | `mintToHash` service without receipts | It may claim directly with its chosen `k1`; receipt use is optional. |
-| New wallet or signer | Current upstream/dni service | Request an ordinary invoice and use the existing preimage-import-and-rotate flow. |
-| Old wallet | New service | It sends no `h`; every existing response and preimage flow is unchanged. |
-| Generic LNURL wallet | New service | LUD-03 and LUD-06 behaviour is unchanged; unknown JSON fields are ignored. |
+| New software wallet | LUD-25 service without receipts | It claims directly with its chosen `k1`; receipt use is optional. |
+| New sealed signer | LUD-25 service without receipts | It must use another authenticated confirmation path or decline before payment. |
+| Old minting wallet | Current LUD-25 service | It sends no comment and is rejected before invoice creation; redemption of existing notes remains compatible. |
+| Generic LNURL wallet redeeming a note | New service | Ordinary LUD-03 redemption is unchanged; unknown response fields are ignored. |
 
 Absence of `mint` means only that the optional receipt is unavailable. It
 does not make a service non-compliant with the current LUD-25 draft.

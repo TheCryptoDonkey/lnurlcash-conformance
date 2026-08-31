@@ -95,10 +95,13 @@ const gradeMintFlow = async mockOptions => {
   })
   try {
     const gross = 500_000
-    const quote = await (await fetch(`${mint.url}/p/cb?amount=${gross}`)).json()
+    const k1 = bytesToHex(randomBytes(32))
+    const comment = bytesToHex(sha256(hexToBytes(k1)))
+    const quote = await (
+      await fetch(`${mint.url}/p/cb?amount=${gross}&comment=${comment}`)
+    ).json()
     const paymentHash = quote.verify.split('/').pop()
     await fetch(`${mint.url}/_test/settle?payment_hash=${paymentHash}`)
-    const k1 = mint.state.invoices.get(paymentHash).preimage
     const report = createReport()
     await gradeMintedValue(`${mint.url}/w?k1=${k1}`, report, {
       mintFee: {baseFeeMsat: 1000, feePpm: 1000},
@@ -331,19 +334,24 @@ console.log('ok   a mint replaying a retried mutation passes, and a real double-
 
 // ---- naming the note you are buying ------------------------------------
 //
-// A wallet may name the output hash of the note it is minting, so the
-// payment preimage stops being the money. Optional and off: a mint that
-// has not implemented it mints exactly what LUD-25 describes, and must
-// still grade clean.
+// A wallet MUST name the output hash in the LUD-12 comment, so the payment
+// preimage never becomes the money. `mintToHash` remains an optional,
+// additive spelling, but it never replaces the mandatory comment.
 
-const MINT_TO_HASH_CHECK = 'accepts a named output on the mint quote (LUD-25 comment / mintToHash, optional)'
+const MINT_TO_HASH_CHECK = 'requires comment-bound minting and honours the mintToHash extension'
 const BOUND_CHECK = 'a bound mint credits the hash the wallet named (optional)'
 
-if (statusOf(bare, MINT_TO_HASH_CHECK) !== 'warn') {
-  die(`a mint not offering mintToHash did not warn: ${statusOf(bare, MINT_TO_HASH_CHECK)}`)
+if (statusOf(bare, MINT_TO_HASH_CHECK) !== 'pass') {
+  die(`the conforming default did not require comment-bound minting: ${statusOf(bare, MINT_TO_HASH_CHECK)}`)
 }
-if (bare.failed > 0) die('a mint not offering mintToHash FAILED the grade - the capability is optional')
-console.log('ok   a mint not offering mintToHash warns and still passes')
+if (bare.failed > 0) die('the conforming default failed comment-bound minting')
+console.log('ok   the default mock requires comment-bound minting')
+
+const noCommentCapability = await grade({commentAllowed: false})
+if (statusOf(noCommentCapability, MINT_TO_HASH_CHECK) !== 'fail') {
+  die(`a mint missing commentAllowed did not fail: ${statusOf(noCommentCapability, MINT_TO_HASH_CHECK)}`)
+}
+console.log('ok   a mint that cannot accept the mandatory comment fails')
 
 const binding = await grade({mintToHash: true})
 if (binding.failed > 0) {
@@ -431,26 +439,15 @@ if (!/named by comment/.test(detailOf(byComment, MINT_TO_HASH_CHECK))) {
 if (byComment.failed > 0) die('a mint naming outputs by comment FAILED the grade')
 console.log('ok   a mint naming outputs by LUD-12 comment passes, and the report names the spelling')
 
-// commentAllowed under 64 cannot carry a hex-encoded 32-byte hash at all,
-// so it is an ordinary LUD-12 comment box and not this capability.
+// commentAllowed under 64 cannot carry a hex-encoded 32-byte hash and
+// therefore cannot mint under the current draft.
 const shortComment = await grade({commentAllowed: 32})
-if (statusOf(shortComment, MINT_TO_HASH_CHECK) !== 'warn') {
-  die(`commentAllowed of 32 was read as the naming capability: ${statusOf(shortComment, MINT_TO_HASH_CHECK)}`)
+if (statusOf(shortComment, MINT_TO_HASH_CHECK) !== 'fail') {
+  die(`commentAllowed of 32 did not fail minting: ${statusOf(shortComment, MINT_TO_HASH_CHECK)}`)
 }
-// ...and it is not read as the MANDATE either. A commentAllowed too short to
-// hold a hash is not this capability, so nothing about it may be required:
-// grading the check alone missed a mock that enforced the mandate at 32 and
-// failed an unrelated check for it.
-if (shortComment.failed > 0) {
-  for (const r of shortComment.results.filter(r => r.status === 'fail')) {
-    console.error(`  FAIL ${r.name} - ${r.detail}`)
-  }
-  die('a commentAllowed of 32 had the comment mandate enforced against it')
-}
-console.log('ok   a commentAllowed too short to hold a hash is not read as the capability')
+console.log('ok   a commentAllowed too short to hold a hash fails')
 
-// SUPERSEDES the draft's line 80 - see docs/COMMENT-IS-MANDATORY.md. A mint
-// advertising comment protection MUST refuse a missing or malformed
+// Current LUD-25 requires a mint advertising comment protection to refuse a missing or malformed
 // comment, not fall back to keying the note by the payment preimage: a
 // preimage-keyed note is only as safe as every routing hop's honesty, and a
 // funding source that settles without a preimage at all (Spark) cannot mint
@@ -491,7 +488,9 @@ const gradeBound = async (mockOptions = {}) => {
   try {
     const secret = bytesToHex(randomBytes(32))
     const h = bytesToHex(sha256(hexToBytes(secret)))
-    const quote = await (await fetch(`${mint.url}/p/cb?amount=21000&h=${h}`)).json()
+    const quote = await (
+      await fetch(`${mint.url}/p/cb?amount=21000&comment=${h}&h=${h}`)
+    ).json()
     if (quote.status === 'ERROR') die(`the mock refused a well-formed h: ${quote.reason}`)
     const paymentHash = quote.verify.split('/').pop()
     await fetch(`${mint.url}/_test/settle?payment_hash=${paymentHash}`)
@@ -535,7 +534,9 @@ console.log('ok   a bound mint credits the wallet\'s own hash, and the preimage 
     }
     const secret = bytesToHex(randomBytes(32))
     const h = bytesToHex(sha256(hexToBytes(secret)))
-    const quote = await (await fetch(`${mint.url}/p/cb?amount=21000&h=${h}`)).json()
+    const quote = await (
+      await fetch(`${mint.url}/p/cb?amount=21000&comment=${h}&h=${h}`)
+    ).json()
     if (quote.mintToHash !== true || quote.mint?.h !== h || quote.mint?.amount !== 21000) {
       die('the receipt mock did not commit the bound quote before payment')
     }
@@ -562,15 +563,14 @@ console.log('ok   a bound mint credits the wallet\'s own hash, and the preimage 
 }
 console.log('ok   optional bound receipt commits before payment and signs only after settlement')
 
-// The mint that advertises the capability, takes the parameter, and mints
-// the note at the payment hash anyway. The wallet stopped rotating on
-// sight because it was told it did not need to, so this is the worst of
-// both schemes and must fail.
-const lying = await gradeBound({mintToHashIgnoresH: true})
-if (!caughtBy(lying, BOUND_CHECK)) {
-  die('a mint advertising mintToHash and minting at the preimage hash anyway PASSED - the grader is blind')
+// A claimed extension must not ignore a disagreement between h and the
+// mandatory comment. Accepting it leaves two different output commitments
+// on one paid quote.
+const lying = await grade({mintToHash: true, mintToHashIgnoresH: true})
+if (!caughtBy(lying, MINT_TO_HASH_CHECK)) {
+  die('a mint accepting mismatched h and comment PASSED - the grader is blind')
 }
-console.log('ok   a mint binding nothing while advertising that it does caught')
+console.log('ok   a mint accepting mismatched h and comment caught')
 
 // And the id a settled note occupies must not be sellable as a fresh
 // quote: the payer would be buying a note somebody else can already spend.
@@ -593,7 +593,11 @@ console.log('ok   a quote sold against a live note id caught')
   try {
     const secret = bytesToHex(randomBytes(32))
     const h = bytesToHex(sha256(hexToBytes(secret)))
-    const quote = await (await fetch(`${mint.url}/p/cb?amount=21000&h=${h.toUpperCase()}`)).json()
+    const quote = await (
+      await fetch(
+        `${mint.url}/p/cb?amount=21000&comment=${h.toUpperCase()}&h=${h.toUpperCase()}`
+      )
+    ).json()
     if (quote.status === 'ERROR') die(`the mock refused an upper-case h: ${quote.reason}`)
     if (quote.mintToHash !== true) die('an upper-case h was taken without the quote saying it was bound')
     const paymentHash = quote.verify.split('/').pop()
@@ -604,7 +608,9 @@ console.log('ok   a quote sold against a live note id caught')
     }
     if (note.maxWithdrawable !== 21000) die(`the note is worth ${note.maxWithdrawable}`)
     // ...and the lowercase spelling is now the same taken id, not a free one
-    const twin = await (await fetch(`${mint.url}/p/cb?amount=21000&h=${h}`)).json()
+    const twin = await (
+      await fetch(`${mint.url}/p/cb?amount=21000&comment=${h}&h=${h}`)
+    ).json()
     if (twin.status !== 'ERROR') {
       die('the lowercase spelling of a bound hash was sold again - the two spellings are being read as two outputs')
     }

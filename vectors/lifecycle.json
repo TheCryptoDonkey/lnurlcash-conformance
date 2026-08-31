@@ -9,13 +9,14 @@
   ],
   "scenarios": [
     {
-      "name": "mint then rotate",
+      "name": "mint to a wallet-generated secret",
       "steps": [
-        "pay the payRequest invoice",
-        "the preimage is the k1",
-        "rotate immediately"
+        "persist a fresh secret",
+        "send its hash as the LUD-12 comment",
+        "pay the invoice",
+        "claim with the persisted secret"
       ],
-      "requirement": "a WALLET MUST rotate straight after claiming a minted note: the SERVICE generated that preimage and is a permanent prior holder of it. Anyone who saw the unpaid invoice can poll LUD-21 verify and race for it."
+      "requirement": "a SERVICE MUST reject a missing or malformed comment before invoicing. The payment preimage is only settlement proof; the freshly minted bearer k1 is the WALLET-generated secret whose hash was carried in comment."
     },
     {
       "name": "melt is not settlement",

@@ -66,9 +66,8 @@ const DEFAULTS = {
   // WALLET that handles one but not the other fails against real mints.
   // Run your client against both.
   withdrawLinkForm: 'plain',
-  // LUD-21 verify endpoint. Off means 404, not merely unadvertised: the
-  // preimage it serves IS a bearer secret, so an operator needs a real
-  // off switch.
+  // LUD-21 verify endpoint. Off means 404, not merely unadvertised, so the
+  // mock can exercise current mints that provide no settlement polling.
   verify: true,
   // Publish `payLink` on a note's informational GET, the way home for a
   // holder who has nothing but the note. On by default because the
@@ -166,17 +165,14 @@ const DEFAULTS = {
   //
   // ---- naming the note you are buying ----
   //
-  // Off, and nothing about it reaches the wire: nothing is advertised
-  // anywhere, the pay callback does not read `h` at all, and a minted
-  // note's secret is the payment preimage exactly as it always was.
+  // Off means only the additive `h` spelling is absent: it is not advertised
+  // and the pay callback does not read it. Mandatory comment-bound minting
+  // remains active independently.
   //
-  // On, a WALLET MAY add h=<64 lowercase hex> to the LUD-06 pay callback -
-  // the sha256 of a secret it chose, the same thing `h` means on the
-  // withdraw callback. The note is then credited at that id when the
-  // invoice settles, and the payment preimage is NOT a valid k1 for it.
-  // Which matters because two sets of untrusted people learn a preimage:
-  // every routing node on the payment path, and anyone who merely saw the
-  // invoice and polled /verify with its payment hash.
+  // On, a WALLET MAY repeat the mandatory comment hash as
+  // h=<64 lowercase hex> on the LUD-06 pay callback. This enables the
+  // earlier ForgeSworn/Moneyer capability and receipt vocabulary without
+  // changing which output the normative comment names.
   //
   // The capability is claimed in three places and they say different
   // things. `mintToHash: true` on the payRequest means "I accept an h on
@@ -216,10 +212,10 @@ const DEFAULTS = {
   // already names a note, an invoice or another quote's output, so two
   // payers' money points at one id
   mintToHashAcceptsUsedH: false,
-  // non-compliant, mintToHash on: advertise the capability, echo it back
-  // on the quote, and credit the note at the payment hash anyway. The
-  // wallet stopped rotating on sight because it was told it did not need
-  // to, so this is the worst of both schemes
+  // non-compliant, mintToHash on: accept h and mandatory comment even when
+  // they name different outputs. The comment still binds the note, but the
+  // extension claim is false and a receipt-watching signer follows the
+  // other commitment.
   mintToHashIgnoresH: false,
   // Which of the three the mock actually says it in. Undefined means all
   // three, which is what an honest mint publishes. Narrowing it changes
@@ -230,21 +226,17 @@ const DEFAULTS = {
   // array or a comma-separated string, so the CLI can pass one.
   mintToHashAdvertisedOn: undefined,
 
-  // The SAME capability in the spelling LUD-25 actually specifies:
+  // The mandatory minting commitment in the spelling LUD-25 specifies:
   // `comment = hex(sha256(secret))` (LUD-12), advertised as a
   // `commentAllowed` of at least 64. A number advertises that many
-  // characters and reads `comment` as the output name; false says
-  // nothing and reads nothing. Independent of mintToHash - a mint may
-  // ship either, both, or neither.
+  // characters and reads `comment` as the output name. The conforming
+  // default is 64. Setting it false or below 64 deliberately models a
+  // SERVICE that cannot mint under the current draft.
   //
-  // The two spellings are not symmetric, and that is the whole reason
-  // both exist here. `h` is a parameter invented for naming, so a
-  // malformed one MUST be refused before an invoice exists. `comment` is
-  // plain LUD-12 free text any wallet may send for unrelated reasons, so
-  // LUD-25 requires the opposite: fall back to crediting k1=P, never
-  // refuse - and MUST NOT serve verify on that fallback, where P is not
-  // proof of payment but the note itself.
-  commentAllowed: false,
+  // `h` remains an additive Moneyer compatibility field. When supplied it
+  // must be well formed and equal the mandatory comment; it never replaces
+  // the comment and cannot make an otherwise unnamed quote valid.
+  commentAllowed: 64,
   // non-compliant, commentAllowed on: fall back to a preimage-keyed note
   // when the comment is missing or malformed, instead of refusing. This was
   // the draft's line 80 behaviour and is now the defect - see
@@ -424,10 +416,9 @@ export const createMockMint = async (options = {}) => {
       const invoice = hash ? invoices.get(hash) : null
       if (!invoice) return fail('unknown payment hash')
       invoice.settled = true
-      // paying a mint invoice is what brings its note into existence. The
-      // preimage IS the note secret and the note id IS the payment hash,
-      // unless the wallet named an output hash of its own on the quote -
-      // then the note is credited there and the preimage is nobody's key.
+      // Paying a mint invoice brings its comment-bound note into existence.
+      // The payment-hash target is reachable only under deliberate legacy
+      // defect flags that allowed an unnamed quote.
       const target = invoice.boundTo ?? hash
       if (!notes.has(target)) mintNote(target, invoice.amountMsat)
       if (invoice.boundTo) boundOutputs.delete(invoice.boundTo)
@@ -656,6 +647,7 @@ export const createMockMint = async (options = {}) => {
       // before the option existed.
       let boundTo = null
       let echoBound = false
+      let requestedH = null
       if (opts.mintToHash) {
         // absent is not the same as empty: a wallet that sent `h=` meant
         // to bind, and must not be handed an unbound quote in silence
@@ -684,6 +676,7 @@ export const createMockMint = async (options = {}) => {
             return fail('Invalid or already spent k1.')
           }
           if (wellFormed) {
+            requestedH = h
             // The echo says "this quote is bound", so an honest mint
             // sets it exactly when it did bind. mintToHashIgnoresH is the
             // mint that says it and does not; leaving 'quote' out of
@@ -694,9 +687,9 @@ export const createMockMint = async (options = {}) => {
         }
       }
 
-      // The LUD-25 spelling. Read after `h` so a mock offering both lets
-      // an explicit comment name the output, and deliberately NOT an
-      // else-branch: a mint may ship either spelling or both.
+      // The LUD-25 spelling. It is mandatory for every mint quote. The
+      // additive `h` spelling may corroborate it, but never substitutes for
+      // it and must name the same output when both are present.
       let namedByComment = false
       // >= 64, the same threshold the runner reads the capability at: a
       // commentAllowed too short to carry a 32-byte hash is not this
@@ -713,21 +706,25 @@ export const createMockMint = async (options = {}) => {
             if (outputIdInUse(h) && !opts.mintToHashAcceptsUsedH) {
               return fail('Invalid or already spent k1.')
             }
-            if (!opts.mintToHashIgnoresH) {
-              boundTo = h
-              namedByComment = true
+            if (
+              requestedH !== null &&
+              requestedH !== h &&
+              !opts.mintToHashIgnoresH
+            ) {
+              return fail('h and comment must name the same output.')
             }
+            // The normative comment always binds the quote. The defect flag
+            // only models an extension implementation that ignores or fails
+            // to compare h.
+            boundTo = h
+            namedByComment = true
           } else if (
             !opts.commentFallsBack &&
-            !(opts.commentFallsBackWhenAbsent && sent === null) &&
-            !boundTo
+            !(opts.commentFallsBackWhenAbsent && sent === null)
           ) {
-            // A mint advertising comment protection requires the output to
-            // be NAMED - by either spelling. A quote nobody named can only
-            // be keyed by the payment preimage, which every routing hop
-            // learns, and which a Spark-style funding source never produces
-            // at all. `boundTo` is already set if the `h` spelling named
-            // it, so this refuses only a quote that arrived anonymous.
+            // A mint quote without the mandatory comment can only fall back
+            // to the payment preimage. The current draft forbids that even
+            // when the additive `h` field happened to name an output too.
             return fail(
               'Missing or malformed comment: a hex-encoded 32-byte hashed secret is required to mint.'
             )
@@ -745,15 +742,10 @@ export const createMockMint = async (options = {}) => {
       }
       invoices.set(paymentHash, invoice)
       const body = {pr, disposable: false}
-      // LUD-25 gates verify on whether the note was named: in the
-      // no-comment fallback the preimage verify would hand out IS the
-      // note's entire bearer secret, so a mint offering the comment
-      // spelling must withhold verify from quotes that used it. A mock
-      // that never heard of the comment spelling keeps answering exactly
-      // as it always did.
-      // Named by EITHER spelling, at the same >= 64 threshold the capability
-      // is read at: withholding verify from a quote bound via `h` would
-      // contradict the rule that either spelling names the output.
+      // Verify is safe for every conforming quote because comment-bound
+      // minting makes the payment preimage ordinary settlement proof. The
+      // conditional remains only so the mock can reproduce the retired
+      // preimage-backed behaviour when commentAllowed is deliberately off.
       const verifySafe =
         !(opts.commentAllowed >= 64) || Boolean(boundTo) || opts.verifyOnUnnamedMint
       if (opts.verify && verifySafe) body.verify = `${origin}/verify/${paymentHash}`
@@ -785,11 +777,9 @@ export const createMockMint = async (options = {}) => {
       const body = {
         status: 'OK',
         settled: invoice.settled,
-        // the preimage IS the bearer secret here - a real SERVICE should
-        // think hard before serving it, and a WALLET that receives one
-        // must rotate immediately. The exception is a quote the wallet
-        // bound with its own h: that note is credited elsewhere, so the
-        // preimage is an ordinary payment proof and leaks nothing.
+        // For a conforming comment-bound quote this is ordinary payment
+        // proof and never the bearer secret. It becomes a bearer secret only
+        // in the mock's deliberately non-compliant legacy mode.
         preimage: invoice.settled || opts.verifyLeaksEarly ? invoice.preimage : null,
         pr: invoice.pr ?? fakeInvoice(invoice.amountMsat, invoice.preimage)
       }

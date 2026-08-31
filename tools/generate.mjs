@@ -1101,7 +1101,7 @@ const payRequest = {
   version: VERSION,
   spec: 'LUD-06, LUD-11, LUD-16, LUD-21, LUD-25',
   description:
-    'Minting. A LUD-06 payRequest MAY advertise `withdrawLink`, the raw LUD-17 URL of the withdraw endpoint: the payment preimage of its paid invoice becomes a valid k1 there. A WALLET MUST rotate immediately after claiming, because the SERVICE necessarily saw that preimage.',
+    'Minting. A LUD-06 payRequest MAY advertise `withdrawLink`, the raw LUD-17 URL of the withdraw endpoint, and MUST then advertise `commentAllowed: 64`. Before paying, WALLET generates and persists a 32-byte secret and sends `comment=hex(sha256(secret))`; SERVICE rejects a missing or malformed comment before issuing an invoice. The payment preimage is settlement proof, never the bearer k1.',
   accepted: [
     {
       name: 'a minting payRequest',
@@ -1111,9 +1111,11 @@ const payRequest = {
         minSendable: 1000,
         maxSendable: 100000000,
         metadata: meta([['text/plain', 'a mint'], ['text/identifier', 'mint@mint.example']]),
+        commentAllowed: 64,
         withdrawLink: 'lnurlw://mint.example/w'
       },
       withdrawLink: 'lnurlw://mint.example/w',
+      commentAllowed: 64,
       mintFee: null
     },
     {
@@ -1124,9 +1126,11 @@ const payRequest = {
         minSendable: 1000,
         maxSendable: 100000000,
         metadata: meta([['text/plain', 'a mint'], ['text/identifier', 'mint@mint.example']]),
+        commentAllowed: 64,
         withdrawLink: 'https://mint.example/w'
       },
       withdrawLink: 'https://mint.example/w',
+      commentAllowed: 64,
       mintFee: null,
       why: 'LUD-25 says a raw, non-bech32 URL "as described in LUD-17", and LUD-17 describes both the lnurlw:// scheme and the plain URL it stands for. lnurl-mint, and the spec diagram, use this form; moneyer uses lnurlw://. A WALLET MUST accept either, unchanged, and resolve it through the same LUD-17 rule as any other input'
     },
@@ -1138,9 +1142,11 @@ const payRequest = {
         minSendable: 1000,
         maxSendable: 100000000,
         metadata: meta([['text/plain', 'a mint']]),
+        commentAllowed: 64,
         withdrawLink: 'lnurlw://mintmintmintmintmintmintmintmintmintmintmintmintmintmi.onion/w'
       },
       withdrawLink: 'lnurlw://mintmintmintmintmintmintmintmintmintmintmintmintmintmi.onion/w',
+      commentAllowed: 64,
       mintFee: null,
       why: 'the parser passes the link through; resolution to http:// happens when a note is built from it (see note-url.json build)'
     },
@@ -1152,9 +1158,11 @@ const payRequest = {
         minSendable: 1000,
         maxSendable: 100000000,
         metadata: meta([['text/plain', 'a mint'], ['text/plain', 'Mint fees: 1000,2000']]),
+        commentAllowed: 64,
         withdrawLink: 'lnurlw://mint.example/w'
       },
       withdrawLink: 'lnurlw://mint.example/w',
+      commentAllowed: 64,
       mintFee: {baseFeeMsat: 1000, feePpm: 2000}
     },
     {
@@ -1172,8 +1180,49 @@ const payRequest = {
   ],
   rejected: [
     {name: 'wrong tag', body: {tag: 'withdrawRequest', callback: 'https://mint.example/p/cb'}},
-    {name: 'no callback', body: {tag: 'payRequest', minSendable: 1000, maxSendable: 1000}}
+    {name: 'no callback', body: {tag: 'payRequest', minSendable: 1000, maxSendable: 1000}},
+    {
+      name: 'minting payRequest without room for the required hash comment',
+      body: {
+        tag: 'payRequest',
+        callback: 'https://mint.example/p/cb',
+        minSendable: 1000,
+        maxSendable: 100000000,
+        metadata: meta([['text/plain', 'a broken mint']]),
+        withdrawLink: 'lnurlw://mint.example/w'
+      },
+      why: 'current LUD-25 draft: minting is unavailable unless commentAllowed can carry exactly the 64-character hash commitment'
+    }
   ],
+  mintCallback: {
+    accepted: [
+      {
+        name: 'wallet names the freshly minted note before invoice creation',
+        amountMsat: 21000,
+        comment: noteId(K1_A),
+        result: 'invoice',
+        noteId: noteId(K1_A),
+        bearerK1: K1_A,
+        paymentPreimageIsBearerK1: false
+      }
+    ],
+    rejected: [
+      {
+        name: 'missing comment',
+        amountMsat: 21000,
+        comment: null,
+        result: 'error-before-invoice',
+        why: 'an unnamed mint would make the payment preimage the money, which the current draft no longer permits'
+      },
+      {
+        name: 'malformed comment',
+        amountMsat: 21000,
+        comment: 'not-a-32-byte-hash',
+        result: 'error-before-invoice',
+        why: 'comment must be bare hex encoding of a 32-byte SHA-256 output'
+      }
+    ]
+  },
   invoice: {
     accepted: [
       {
@@ -1221,7 +1270,7 @@ const payRequest = {
         body: {status: 'OK', settled: true, preimage: K1_A, pr: 'lnbc210n1pjq'},
         settled: true,
         preimage: K1_A,
-        why: 'for LNURLcash this preimage IS the bearer secret - rotate immediately, and never treat verify as having closed the exposure'
+        why: 'the payment preimage proves settlement but cannot redeem the comment-bound bearer note'
       },
       {
         name: 'settled, preimage withheld',
@@ -1254,10 +1303,10 @@ const lifecycle = {
   states: ['pending', 'confirmed', 'spent'],
   scenarios: [
     {
-      name: 'mint then rotate',
-      steps: ['pay the payRequest invoice', 'the preimage is the k1', 'rotate immediately'],
+      name: 'mint to a wallet-generated secret',
+      steps: ['persist a fresh secret', 'send its hash as the LUD-12 comment', 'pay the invoice', 'claim with the persisted secret'],
       requirement:
-        'a WALLET MUST rotate straight after claiming a minted note: the SERVICE generated that preimage and is a permanent prior holder of it. Anyone who saw the unpaid invoice can poll LUD-21 verify and race for it.'
+        'a SERVICE MUST reject a missing or malformed comment before invoicing. The payment preimage is only settlement proof; the freshly minted bearer k1 is the WALLET-generated secret whose hash was carried in comment.'
     },
     {
       name: 'melt is not settlement',
@@ -1720,18 +1769,11 @@ const retriedMutation = {
 
 // ---- vectors: naming the note you are buying -----------------------------
 
-// In LUD-25 a minted note\'s k1 is the payment preimage, so the preimage IS
-// the money. Two sets of people learn it without being trusted with it:
-// every routing node on the payment path, because that is how HTLC
-// settlement works, and anyone who has merely seen the invoice, because
-// they can poll LUD-21 verify with its payment hash and take the preimage
-// the moment it settles. A QR on a desktop screen is exactly that. "Rotate
-// immediately" is the only defence and it is a race.
-//
-// The fix needs no change to the draft, because the wallet already supplies
-// `h` for every other output it asks for: let it supply one on the mint
-// quote too. The mint credits the note at that id, and the preimage becomes
-// an ordinary payment proof that opens nothing.
+// Current LUD-25 minting names every new output with the wallet's mandatory
+// LUD-12 comment commitment. The payment preimage is ordinary settlement
+// proof and never the bearer secret. ForgeSworn/Moneyer implementations that
+// shipped the earlier `h` spelling repeat the same commitment in both fields;
+// `h` is an additive capability and receipt vocabulary, never a substitute.
 //
 // What has to be pinned is the parameter name, what counts as well-formed,
 // and the two refusal reasons - or two mints answer the same wallet two
@@ -1767,10 +1809,10 @@ const mthWellFormed = h => typeof h === 'string' && /^[0-9a-f]{64}$/i.test(h)
 const mthComparedAs = h => (mthWellFormed(h) ? h.toLowerCase() : null)
 
 const mintToHashOutcome = h => {
-  if (h === null) return 'unbound'
+  if (h === null) return 'comment-only'
   if (!mthWellFormed(h)) return 'malformed-h'
   if (MTH_IN_USE.includes(mthComparedAs(h))) return 'collision'
-  return 'bound'
+  return 'extension-bound'
 }
 
 const mintToHashCase = (name, h, why) => {
@@ -1779,14 +1821,17 @@ const mintToHashCase = (name, h, why) => {
   return {
     name,
     amountMsat: MTH_AMOUNT,
+    // Current LUD-25 commitment. The extension may repeat the same output
+    // in `h`, but it never substitutes for this field.
+    comment: mthWellFormed(h) ? comparedAs : MTH_H,
     h,
     // what the SERVICE compares and keys by: the same 32 bytes, lowercase
     comparedAs,
     outcome,
-    invoiced: outcome === 'bound' || outcome === 'unbound',
+    invoiced: outcome === 'extension-bound' || outcome === 'comment-only',
     // the pay callback's own response says whether THIS quote was bound
-    echo: outcome === 'bound',
-    noteId: outcome === 'bound' ? comparedAs : outcome === 'unbound' ? MTH_PAYMENT_HASH : null,
+    echo: outcome === 'extension-bound',
+    noteId: outcome === 'extension-bound' ? comparedAs : outcome === 'comment-only' ? MTH_H : null,
     reason:
       outcome === 'malformed-h'
         ? MTH_REASONS.malformed
@@ -1813,6 +1858,7 @@ const advertisementCase = (where, name, value, why) => {
           minSendable: 1000,
           maxSendable: 100000000,
           metadata: meta([['text/plain', 'a mint']]),
+          commentAllowed: 64,
           withdrawLink: 'https://mint.example/w',
           ...field
         }
@@ -1861,21 +1907,21 @@ const advertisementCases = where => [
 
 const mintToHash = {
   version: VERSION,
-  spec: 'LUD-06, LUD-21, LUD-25',
+  spec: 'LUD-06, LUD-21, LUD-25 plus ForgeSworn mintToHash extension',
   description:
-    'Naming the note you are buying. A WALLET MAY add `h` to the LUD-06 pay callback when minting: the sha256 of a secret it chose, 32 bytes as 64 lowercase hex, exactly what `h` means on the withdraw callback. The SERVICE then credits the minted note at that id on settlement, and the payment preimage is NOT a valid k1 for it. That is the whole point: in LUD-25 a minted note\'s k1 is the payment preimage, so the preimage is the money, and two sets of people learn it without being trusted with it - every routing node on the payment path, and anyone who merely saw the invoice and polled LUD-21 verify with its payment hash. Without `h` nothing changes and the preimage is still the secret, so this is purely additive: a SERVICE that has not implemented it is not broken, it simply does not offer the capability. This file fixes the parameter name, what counts as well-formed, and both refusal reasons, so implementations in different languages answer the same wallet the same way.',
+    'ForgeSworn compatibility profile layered on current LUD-25 minting. The normative output commitment is always `comment=hex(sha256(secret))`. A WALLET MAY repeat that same 64-hex hash as `h` for services and sealed-signer receipts that shipped before the comment spelling. `h` never replaces comment; if present it must be well formed and identify the same output. With or without the extension, the payment preimage is settlement proof and never a valid bearer k1.',
   parameter: {
     name: 'h',
-    on: 'the LUD-06 pay callback, alongside amount',
-    value: 'sha256 of a WALLET-chosen secret, 32 bytes as 64 lowercase hex',
+    on: 'the LUD-06 pay callback, alongside amount and the mandatory identical comment',
+    value: 'the same sha256 commitment already carried in comment, 32 bytes as 64 lowercase hex',
     optional: true,
-    absent: 'today\'s behaviour, unchanged: the note is credited at the payment hash and its k1 is the payment preimage'
+    absent: 'current LUD-25 behaviour: comment alone names the wallet-generated bearer secret'
   },
   caseRule: {
     wallet:
-      'A WALLET MUST send `h` as 64 lowercase hex. Strict on the producer side costs nothing and is what every implementation here does.',
+      'A WALLET using this extension MUST send the same commitment in `comment` and `h`, each as 64 lowercase hex.',
     service:
-      'A SERVICE SHOULD normalise case before comparing, and MUST NOT treat an otherwise well-formed upper-case `h` as a different output from its lowercase form. Hex is case-insensitive: both spellings are the same 32 bytes, so they name one output, not two.',
+      'A SERVICE MUST require the normative comment, SHOULD normalise hex case before comparing, MUST reject a mismatched h, and MUST NOT treat upper- and lower-case spellings as different outputs.',
     whyItMatters:
       'A SERVICE that keys the string it was handed files the note under the upper-case spelling, and then cannot find it when the wallet asks the withdraw endpoint for its own lowercase secret. The money is not stolen, it is simply lost, and nobody is told. A SERVICE that instead refuses an upper-case `h` outright is being strict rather than wrong, and loses nobody anything - the wallet learns before it pays.',
     comparedAs:
@@ -1909,10 +1955,10 @@ const mintToHash = {
   },
   reasons: MTH_REASONS,
   outcomes: {
-    bound:
-      'an invoice is issued carrying `mintToHash: true`, and on settlement the note is credited at `comparedAs` - `h` lowercased, which for a WALLET following the rule is `h` itself. The payment preimage names nothing',
-    unbound:
-      'no `h` was sent: an invoice is issued and on settlement the note is credited at the payment hash, whose k1 is the payment preimage',
+    'extension-bound':
+      'comment and h name the same output; an invoice is issued carrying `mintToHash: true`, and settlement credits that committed hash. The payment preimage names nothing',
+    'comment-only':
+      'no h was sent: the mandatory comment still names the output, and the payment preimage names nothing',
     'malformed-h':
       'not 32 bytes of hex in any casing: refused before any invoice exists, so a wallet never pays for a quote the SERVICE was always going to reject',
     collision:
@@ -1925,7 +1971,7 @@ const mintToHash = {
     why: 'An id already spoken for must never be minted over. A note\'s id has a preimage every previous holder knows; an invoice\'s payment hash points a future payer\'s money at a stranger\'s note, since its verify endpoint serves the preimage that IS the k1 of whatever sits under that id; and a second quote at an id another quote is already waiting to credit means whichever settles first takes it and the other payment lands nowhere.'
   },
   cases: [
-    mintToHashCase('no h at all', null, 'the LUD-25 flow as it stands: nothing here is a change'),
+    mintToHashCase('no h at all', null, 'the current LUD-25 flow: the mandatory comment names the output without the extension'),
     mintToHashCase('a well-formed h', MTH_H),
     mintToHashCase(
       'an h that is not hex',
@@ -1969,20 +2015,21 @@ const mintToHash = {
     description:
       'One worked settlement, both ways round, so an implementation can check where the note landed rather than only that an invoice came back.',
     walletSecret: MTH_SECRET,
+    comment: MTH_H,
     h: MTH_H,
     preimage: MTH_PREIMAGE,
     paymentHash: MTH_PAYMENT_HASH,
-    bound: {
+    extensionBound: {
       noteId: MTH_H,
       k1: MTH_SECRET,
       preimageIsAValidK1: false,
       note: 'a software wallet can claim by asking the withdraw endpoint for its own secret directly. A sealed signer that will not export that secret instead uses the optional bound receipt below to confirm the note without revealing k1'
     },
-    unbound: {
-      noteId: MTH_PAYMENT_HASH,
-      k1: MTH_PREIMAGE,
-      preimageIsAValidK1: true,
-      note: 'the wallet must poll verify for the preimage, and rotate the instant it has it'
+    commentOnly: {
+      noteId: MTH_H,
+      k1: MTH_SECRET,
+      preimageIsAValidK1: false,
+      note: 'without h, the mandatory comment still binds the freshly minted note to the wallet secret'
     }
   },
   receipt: {
@@ -1992,7 +2039,7 @@ const mintToHash = {
     field: 'mint',
     keyEstablishment: {
       rule: 'The WALLET must know the receipt verification key before it pays: recover the signing node identity from the BOLT-11 invoice, or read mintPubkey from the payRequest under the wallet\'s existing trust/pinning policy.',
-      payRequest: {mintToHash: true, mintPubkey: MINT_PUB}
+      payRequest: {commentAllowed: 64, mintToHash: true, mintPubkey: MINT_PUB}
     },
     commitment: {
       h: 'the normalised output id committed by this quote; 32 bytes as 64 lowercase hex',
@@ -2023,7 +2070,7 @@ const mintToHash = {
       'A WALLET that requires a receipt MUST refuse to show or pay an invoice unless quote.mintToHash is exactly true and quote.mint matches the h it requested and the exact amount it expects to receive.',
       'Before accepting settlement, it MUST match verify.pr to quote.pr, match verify.mint.h and verify.mint.amount to the quote commitment, require settled to be exactly true, and verify mint.sig with the mint public key and its locally held k1.',
       'A SERVICE MUST NOT return mint.sig before settlement. An unsettled response MAY repeat h and amount so a wallet can diagnose a mismatch, but that repetition is not a receipt.',
-      'Absence of quote.mint means the optional receipt is not offered. A software wallet can still use mintToHash and claim with its own k1; a sealed signer falls back before payment to the legacy preimage-and-rotate flow.'
+      'Absence of quote.mint means the optional receipt is not offered. A software wallet still claims the comment-bound note with its own k1; a sealed signer must use another authenticated confirmation path or decline before payment.'
     ],
     invalid: [
       {
@@ -2066,30 +2113,30 @@ const mintToHash = {
   contradictions: [
     {
       name: 'claims the capability and does not bind',
-      what: 'any of the three says `mintToHash: true`, and the minted note is still opened by the payment preimage',
+      what: 'any of the three says `mintToHash: true`, but the service ignores h or lets it disagree with the mandatory comment',
       verdict: 'broken',
-      why: 'the wallet was told it need not race the preimage, so it did not. The quote echo is the worst version of it, because the wallet was told at the very moment it decided to pay.'
+      why: 'the extension claim is false and any receipt commitment may authenticate a different output from the mandatory comment.'
     },
     {
       name: 'binds and says nothing on the quote',
       what: 'the payRequest advertises it, the quote carries `h`, and the response omits `mintToHash`',
       verdict: 'safe but unconfirmable',
-      why: 'a wallet reading a missing field as false falls back to the preimage flow, which is safe. It simply cannot confirm at the one moment confirmation is worth anything.'
+      why: 'the comment-bound note remains safe, but the wallet cannot rely on extension-specific receipt semantics for this quote.'
     },
     {
       name: 'says nothing anywhere and ignores `h`',
-      what: 'no advertisement, no echo, and the note is the preimage\'s',
+      what: 'no extension advertisement or echo; the mandatory comment still names the note',
       verdict: 'not implemented',
-      why: 'every mint today. Nothing about this is a defect.'
+      why: 'the additive extension is absent; current LUD-25 comment minting remains fully implemented.'
     }
   ],
   walletRules: [
-    'A WALLET MUST persist its chosen secret BEFORE asking for the invoice. Paying and then losing the secret is the one way this makes things worse than the preimage scheme, and persisting first removes it.',
-    'A WALLET MUST send `h` as 64 lowercase hex. A SERVICE SHOULD normalise case before comparing and MUST NOT read the two spellings as two outputs, but a wallet that leans on that will meet a SERVICE that refuses upper case outright.',
-    'A WALLET MUST decide from the payRequest, which every SERVICE publishes, rather than from the experimental mint address document, which many do not. A SERVICE that does not advertise `mintToHash` ignores `h`, and the note it mints is the preimage\'s.',
-    'A WALLET MUST check the pay callback\'s own `mintToHash` before it pays. The other two advertisements can be cached or stale; that one is this quote, now. Absent means not bound, so claim the preimage way and rotate on sight.',
-    'Against a SERVICE that advertises mintToHash, a software WALLET needs no verify poll to claim: it knows its own secret, so it asks the withdraw endpoint for it directly. A sealed signer that will not export k1 MAY require the optional bound receipt and use verify only as authenticated settlement evidence.',
-    'A note minted at a WALLET-chosen hash is the WALLET\'s from birth. A wallet deriving its secrets from a seed can restore that note from the seed alone, which a preimage-secret note can never be.'
+    'A WALLET MUST persist its chosen secret BEFORE asking for the invoice, then send its hash in the mandatory comment.',
+    'A WALLET using the extension MUST repeat that same hash as 64 lowercase hex in h; it MUST NOT send two different output commitments.',
+    'A WALLET decides whether the additive h and receipt fields are supported from mintToHash on the payRequest; absence affects only the extension, never the mandatory comment-bound note.',
+    'A WALLET requiring a bound receipt MUST check the pay callback\'s own mintToHash and mint commitment before paying. If absent, it declines or uses another authenticated confirmation path; it never falls back to a preimage-backed mint.',
+    'A software WALLET needs no verify preimage to claim a comment-bound note: it already knows its secret. A sealed signer MAY require the optional receipt and use verify as authenticated settlement evidence.',
+    'A comment-bound note belongs to the WALLET from birth. Seed-derived secrets make it recoverable without relying on payment history.'
   ]
 }
 

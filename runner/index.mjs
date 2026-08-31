@@ -305,10 +305,8 @@ export const gradeMint = async (payUrl, report) => {
   })
 
   await report.check('verify serves no secret before settlement', async () => {
-    // On a mint the invoice preimage IS the bearer secret of the note the
-    // payment will create, and everyone on the payment's route learns the
-    // payment hash. A verify endpoint that answers the hash with the
-    // preimage before settlement hands the note to whoever polls first.
+    // The payment preimage is safe from bearer-note use once comment-bound,
+    // but it is still a settlement proof and must not exist before payment.
     if (!verifyUrl) throw soft('no LUD-21 verify URL to probe')
     const body = await get(verifyUrl)
     assert(body.status !== 'ERROR', `refused its own verify URL: ${body.reason}`)
@@ -318,7 +316,7 @@ export const gradeMint = async (payUrl, report) => {
     )
     assert(
       body.preimage == null,
-      'served a preimage before settlement - on a mint that value is the bearer secret itself'
+      'served a payment preimage before the invoice settled'
     )
     return 'settled: false, no preimage'
   })
@@ -487,21 +485,10 @@ export const gradeMint = async (payUrl, report) => {
     return detail
   })
 
-  // Naming the note you are buying. No longer outside LUD-25: the draft
-  // spells it `comment = hex(sha256(secret))` (Protecting a freshly minted
-  // note from a preimage race), advertised as a `commentAllowed` of at
-  // least 64 - enough for a hex-encoded 32-byte hash. `mintToHash` is the
-  // parameter form one mint shipped before the comment form was written.
-  // Both are read here: a suite that knows only one spelling reports a
-  // mint that names notes perfectly well in the other as not offering it
-  // at all, which is worse than silence - it tells a wallet author the
-  // safe mint is the unsafe one.
-  //
-  // Soft in the direction that matters: a mint that says nothing anywhere
-  // and names nothing mints exactly what the draft's fallback describes,
-  // which is not a defect. What is graded is a mint that CLAIMS the
-  // capability, because a wallet then stops rotating on sight and trusts
-  // the mint to bind the note.
+  // Naming the note being bought is mandatory in the current LUD-25 draft:
+  // `comment = hex(sha256(secret))`, with `commentAllowed` large enough for
+  // all 64 characters. `mintToHash` is the additive parameter spelling one
+  // mint shipped first. It may corroborate the comment, never replace it.
   //
   // The claim lives in three places. The payRequest is the one to decide
   // from, since every mint publishes one while the mint address document
@@ -510,24 +497,24 @@ export const gradeMint = async (payUrl, report) => {
   // bound. LUD-25 defines no echo for the comment spelling, so a missing
   // echo is only held against a mint claiming `mintToHash`.
   //
-  // The two spellings are NOT symmetric, and that is why this cannot be
-  // one probe with two parameter names:
+  // The two spellings are not symmetric:
   //
   //   `h` is a parameter invented for exactly this purpose, so a malformed
   //   one is a wallet error and MUST be refused before an invoice exists.
   //
-  //   `comment` is plain LUD-12 free text that any wallet may send for
-  //   unrelated reasons, so LUD-25 requires the opposite (line 80 of the
-  //   draft): a comment that is not a bare hex-encoded 32-byte hash MUST
-  //   fall back to crediting the note as k1=P, never be refused - and on
-  //   that fallback the mint MUST NOT serve LUD-21 verify, because there
-  //   P is not proof of payment, it is the entire note.
-  await report.check('accepts a named output on the mint quote (LUD-25 comment / mintToHash, optional)', async () => {
+  //   `comment` is the normative commitment and MUST be present and valid
+  //   before any invoice exists. For an `h` probe the same hash is therefore
+  //   carried in both fields.
+  await report.check('requires comment-bound minting and honours the mintToHash extension', async () => {
     const amount = Math.max(pay.minSendable, 1000)
 
-    // LUD-25: "A mint payLink intending to support this SHOULD advertise a
-    // commentAllowed of at least 64". Anything shorter cannot carry the
-    // hash at all, so it is not this capability whatever else it is.
+    assert(
+      Number.isFinite(pay.commentAllowed) && pay.commentAllowed >= 64,
+      `minting payRequest must advertise commentAllowed: 64, got ${JSON.stringify(pay.commentAllowed)}`
+    )
+
+    // Current LUD-25 minting requires commentAllowed of at least 64.
+    // Anything shorter cannot carry the output commitment at all.
     const spellingsOf = source => {
       const found = []
       if (source?.mintToHash === true) found.push('h')
@@ -538,6 +525,14 @@ export const gradeMint = async (payUrl, report) => {
       const url = new URL(pay.callback)
       url.searchParams.set('amount', String(msat))
       url.searchParams.set(spelling, value)
+      if (spelling === 'h') {
+        // `h` is an additive compatibility field. A conforming quote still
+        // carries the mandatory LUD-12 comment, and both name one output.
+        url.searchParams.set(
+          'comment',
+          /^[0-9a-f]{64}$/i.test(value) ? value : noteId(bytesToHex(randomBytes(32)))
+        )
+      }
       return get(url)
     }
     const spelt = spelling => (spelling === 'comment' ? 'a LUD-12 comment' : 'an h parameter')
@@ -555,7 +550,9 @@ export const gradeMint = async (payUrl, report) => {
     // that accepts both and binds an output id uniquely - as it should,
     // and as the repeat probe below asserts - would rightly refuse the
     // second spelling for naming an output the first just took.
-    const probed = claimed.length > 0 ? claimed : ['h']
+    // Probe h even when it was not advertised: a quote echoing mintToHash
+    // is itself a claim, and is otherwise impossible to discover.
+    const probed = [...new Set([...claimed, 'h'])]
     const named = Object.fromEntries(
       probed.map(spelling => {
         const secret = bytesToHex(randomBytes(32))
@@ -565,15 +562,7 @@ export const gradeMint = async (payUrl, report) => {
     const bound = {}
     for (const spelling of probed) bound[spelling] = await quoteAt(spelling, named[spelling].h)
     const echoedIn = probed.filter(spelling => bound[spelling].mintToHash === true)
-
-    if (claimed.length === 0 && echoedIn.length === 0) {
-      const refused = probed.map(spelling => bound[spelling]).find(body => body.status === 'ERROR')
-      throw soft(
-        refused
-          ? `not offered, and a named output was refused outright: ${refused.reason}`
-          : 'not offered - a minted note\'s k1 is the invoice preimage, which every routing node on the payment path learns, so a wallet must claim and rotate the instant it settles'
-      )
-    }
+    const hClaimed = claimed.includes('h') || echoedIn.includes('h')
 
     const problems = []
     const claimedBy = [
@@ -626,6 +615,7 @@ export const gradeMint = async (payUrl, report) => {
       for (const [what, value] of malformed) {
         const body = await quoteAt(spelling, value)
         if (spelling === 'h') {
+          if (!hClaimed) continue
           // A wallet that pays a quote the mint was always going to reject
           // has bought nothing, and the mint keeps the sats.
           assert(
@@ -634,30 +624,33 @@ export const gradeMint = async (payUrl, report) => {
           )
           continue
         }
-        // The comment spelling. This SUPERSEDES the draft's line 80, which
-        // still asks for a preimage-keyed fallback here - see
-        // docs/COMMENT-IS-MANDATORY.md. A mint advertising comment
-        // protection must refuse rather than fall back: the fallback note
-        // is keyed by the payment preimage, which every routing hop on the
-        // payment learns, and which a funding source that settles without
-        // one cannot produce at all.
+        // The normative comment spelling. A malformed commitment is refused
+        // before invoice creation; there is no preimage-backed fallback.
         assert(
           body.status === 'ERROR' && !body.pr,
-          `issued an invoice for a comment that is ${what} - this mint advertises comment protection, so an unnamed quote can only mint a preimage-keyed note, and a wallet that pays for one holds a secret every hop on the route already saw`
+          `issued an invoice for a comment that is ${what} - current LUD-25 requires a well-formed wallet commitment before invoice creation`
         )
       }
     }
 
-    // The malformed loop above can only probe values; a quote carrying no
-    // comment at all is the commonest way to arrive unnamed, and it is the
-    // one an ordinary LUD-06 wallet sends every time.
-    if (probed.includes('comment')) {
-      const bare = new URL(pay.callback)
-      bare.searchParams.set('amount', String(amount))
-      const body = await get(bare)
+    // The malformed loop can only probe values; explicitly cover absence.
+    const bare = new URL(pay.callback)
+    bare.searchParams.set('amount', String(amount))
+    const unnamed = await get(bare)
+    assert(
+      unnamed.status === 'ERROR' && !unnamed.pr,
+      'issued an invoice for a quote carrying no comment - current LUD-25 requires rejection before invoicing'
+    )
+
+    if (hClaimed) {
+      const mismatch = new URL(pay.callback)
+      mismatch.searchParams.set('amount', String(amount))
+      mismatch.searchParams.set('comment', noteId(bytesToHex(randomBytes(32))))
+      mismatch.searchParams.set('h', noteId(bytesToHex(randomBytes(32))))
+      const body = await get(mismatch)
       assert(
         body.status === 'ERROR' && !body.pr,
-        'issued an invoice for a quote carrying no comment - this mint advertises comment protection, so it must refuse rather than mint a note keyed by the payment preimage'
+        'issued an invoice when h and the mandatory comment named different outputs'
       )
     }
 
@@ -667,12 +660,12 @@ export const gradeMint = async (payUrl, report) => {
     // than failed. Whether the mint really binds is the one thing this
     // check cannot see, because that needs a settlement: it is graded
     // separately, and failed rather than warned.
-    if (advertised.includes('h') && echoedIn.length === 0) {
+    if (advertised.includes('h') && !echoedIn.includes('h')) {
       problems.push(
         'bound quotes carry no mintToHash in the response, so a wallet cannot confirm at the one moment it is worth confirming, and falls back to racing the preimage'
       )
     }
-    if (echoedIn.length > 0 && advertised.length === 0) {
+    if (echoedIn.includes('h') && !advertised.includes('h')) {
       problems.push(
         'echoes mintToHash on a quote but does not advertise it on the payRequest, which is the endpoint every mint publishes and the one a wallet decides from'
       )
@@ -694,6 +687,7 @@ export const gradeMint = async (payUrl, report) => {
     const otherAmount = Math.min(pay.maxSendable, amount * 2)
     if (otherAmount !== amount) {
       for (const spelling of probed) {
+        if (spelling === 'h' && !hClaimed) continue
         const twice = await quoteAt(spelling, named[spelling].h, otherAmount)
         if (twice.status !== 'ERROR') {
           problems.push(
@@ -811,6 +805,7 @@ export const gradeBoundMint = async (noteUrl, report, {preimage, payCallback = n
     if (payCallback) {
       const quote = new URL(payCallback)
       quote.searchParams.set('amount', '1000')
+      quote.searchParams.set('comment', noteId(k1))
       quote.searchParams.set('h', noteId(k1))
       const body = await get(quote)
       assert(
