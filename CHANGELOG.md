@@ -6,6 +6,16 @@ exact version if you gate CI on the grade.
 
 ## Unreleased
 
+**The mock mint starts when its path reaches it through a symlink.** The
+standalone guard compared `import.meta.url` against `file://` plus
+`process.argv[1]`, and node resolves a module's URL to its real path while
+argv[1] stays exactly as it was typed. A checkout symlinked into a sibling
+workspace - which is how the language ports pick this repo up locally - failed
+that comparison, so the mint exited silently, printing nothing at all. Every
+port's adversarial suite then hung to EOF and reported the mint as never having
+announced itself, which says nothing about the cause. CI, checking the repo out
+for real, was never affected, so this only ever broke the local run.
+
 ## 0.5.0 - 2026-08-31
 
 **Breaking: the current LUD-25 draft's mandatory mint comment is now the

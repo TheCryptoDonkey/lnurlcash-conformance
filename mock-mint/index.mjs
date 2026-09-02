@@ -15,6 +15,8 @@ import {sha256} from '@noble/hashes/sha2.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {randomBytes} from 'node:crypto'
+import {realpathSync} from 'node:fs'
+import {pathToFileURL} from 'node:url'
 
 const LSM_PREFIX = 'Lightning Signed Message:'
 
@@ -1048,8 +1050,28 @@ export const createMockMint = async (options = {}) => {
   }
 }
 
+// Is this file the entry point?
+//
+// The obvious `import.meta.url === \`file://${process.argv[1]}\`` is wrong
+// wherever the path reaches node through a symlink: node resolves a module's
+// URL to its real path, while argv[1] stays exactly as it was typed. A
+// checkout symlinked into a sibling workspace - which is how the language
+// ports pick this repo up locally - then fails the comparison, and the mint
+// exits silently, printing nothing at all. Every test that waits for the
+// "listening on" line hangs to EOF and reports the mint as never having
+// announced itself, which says nothing about the real cause.
+const isEntryPoint = () => {
+  const entry = process.argv[1]
+  if (!entry) return false
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href
+  } catch {
+    return false
+  }
+}
+
 // standalone
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isEntryPoint()) {
   const flags = {}
   // A flag's value becomes a number only when it really is one. A 64-hex
   // key made of nothing but digits parses as a Number and loses every
