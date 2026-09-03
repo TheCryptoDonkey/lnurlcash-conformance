@@ -110,7 +110,7 @@ const signature = {
   version: VERSION,
   spec: SPEC,
   description:
-    'Offline verification of a note (LUD-25). A SERVICE signs (note id, amount) with its Lightning node identity key via the standard signmessage wrapping; a holder recovers the pubkey and compares it to mintPubkey without contacting the SERVICE.',
+    'Offline verification of a note (LUD-25). A SERVICE signs (note id, amount) with a stable secp256k1 key it controls; this should be the funding node identity where compatible signing exists, or may be a dedicated persistent SERVICE key otherwise. A holder recovers the pubkey and compares it to the pinned current or previous mintPubkey without contacting the SERVICE.',
   scheme: {
     domainTag: DOMAIN_TAG,
     lightningSignedMessagePrefix: LSM_PREFIX,
@@ -476,7 +476,7 @@ const noteUrl = {
   version: VERSION,
   spec: SPEC,
   description:
-    'A note is an ordinary LUD-03 withdrawRequest URL whose k1 IS the asset. `amount` alongside it is only a claim by whoever encoded the note - the authoritative value is always maxWithdrawable from an informational GET. `sig` is the optional offline-verification signature.',
+    'A note is an ordinary LUD-03 withdrawRequest URL whose k1 IS the asset. `amount` alongside it is only a claim by whoever encoded the note - the authoritative value is always maxWithdrawable from an informational GET. A SERVICE returning a rotate, split or merge MUST include the offline-verification signature in `sig` (and `sig2` for the second split output).',
   parse: [
     {
       url: 'https://mint.example/w?k1=' + K1_A + '&amount=21000',
@@ -1338,7 +1338,7 @@ const lifecycle = {
         'the HTTP stack silently resends the identical request'
       ],
       requirement:
-        'a WALLET MUST ensure its HTTP stack does not retry a mutating callback. Every mutation is a GET, HTTP treats GET as idempotent, and an LNURLcash mutation is not: the first attempt burns the input. A retried mutation is answered "invalid or already spent k1", which classifies as a DEFINITIVE rejection - so the WALLET concludes nothing happened and discards the fresh secret that was the only copy of the note the SERVICE just minted. This is not hypothetical: it was found in two independent implementations during this suite\'s own development. Java\'s java.net.http.HttpClient retries idempotent GETs on a mid-flight connection reset and cannot be configured out of it (use a client that can); Go\'s net/http retries when the request went over a REUSED connection, and a client with no explicit Transport shares a process-wide pool, so the behaviour depends on what unrelated code did first (disable keep-alives). Browsers retry on a stale pooled connection for the same reason. Test this deliberately: the mock mint\'s dropAfterMutation mode reproduces it.'
+        'a SERVICE MUST recognize the byte-identical retry from the same k1 set, h, h2 and amount, and return the original success with the same sig and sig2 without moving balance again. A WALLET still persists every fresh output secret before sending the first request and keeps it across an ambiguous transport failure. A request that changes any recorded field is a genuine double-spend attempt and gets the ordinary already-spent refusal.'
     },
     {
       name: 'settle a merge or split output',
@@ -1705,7 +1705,7 @@ const retriedMutation = {
   version: VERSION,
   spec: SPEC,
   description:
-    'What counts as a retry of a mutation, and what is still a double-spend attempt. Every mutation in LUD-25 is a GET, and HTTP stacks retry a GET when the connection they used is dropped, so a SERVICE sees the byte-identical request twice and the second one arrives with its inputs already burned. A SERVICE that answers the retry as an already-spent input tells the holder the mutation never happened, and the holder discards the only copy of a secret the SERVICE really did mint a note against. Replaying the original success instead is a SHOULD, not a MUST: a SERVICE that has not implemented it is not broken, but a SERVICE that has must draw the line in exactly this place, or two SERVICEs give the same wallet two different answers to the same dropped connection. The replay path is a read - it burns nothing, mints nothing and moves no balance - and the signature is deterministic over the output id and amount, so it is recomputed rather than stored. Anything that is NOT a retry and names a burned input is refused exactly as an ordinary double-spend is, with the same reason string, so no oracle appears for whoever is holding a burned secret.',
+    'What counts as a retry of a mutation, and what is still a double-spend attempt. Every mutation in LUD-25 is a GET, and HTTP stacks retry a GET when the connection they used is dropped, so a SERVICE sees the byte-identical request twice and the second one arrives with its inputs already burned. A SERVICE that answers the retry as an already-spent input tells the holder the mutation never happened, and the holder discards the only copy of a secret the SERVICE really did mint a note against. Replaying the original success is therefore a MUST. The replay path is a read: it burns nothing, mints nothing and moves no balance, and returns the same signature or signatures. Anything that is NOT a retry and names a burned input is refused exactly as an ordinary double-spend is, with the same reason string, so no oracle appears for whoever is holding a burned secret.',
   identity: [
     'the same input k1 set, compared as a SET: a merge naming the same notes in a different order is the same merge',
     'the same h',

@@ -58,7 +58,7 @@
         "the connection drops after the SERVICE applied it",
         "the HTTP stack silently resends the identical request"
       ],
-      "requirement": "a WALLET MUST ensure its HTTP stack does not retry a mutating callback. Every mutation is a GET, HTTP treats GET as idempotent, and an LNURLcash mutation is not: the first attempt burns the input. A retried mutation is answered \"invalid or already spent k1\", which classifies as a DEFINITIVE rejection - so the WALLET concludes nothing happened and discards the fresh secret that was the only copy of the note the SERVICE just minted. This is not hypothetical: it was found in two independent implementations during this suite's own development. Java's java.net.http.HttpClient retries idempotent GETs on a mid-flight connection reset and cannot be configured out of it (use a client that can); Go's net/http retries when the request went over a REUSED connection, and a client with no explicit Transport shares a process-wide pool, so the behaviour depends on what unrelated code did first (disable keep-alives). Browsers retry on a stale pooled connection for the same reason. Test this deliberately: the mock mint's dropAfterMutation mode reproduces it."
+      "requirement": "a SERVICE MUST recognize the byte-identical retry from the same k1 set, h, h2 and amount, and return the original success with the same sig and sig2 without moving balance again. A WALLET still persists every fresh output secret before sending the first request and keeps it across an ambiguous transport failure. A request that changes any recorded field is a genuine double-spend attempt and gets the ordinary already-spent refusal."
     },
     {
       "name": "settle a merge or split output",

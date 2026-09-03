@@ -6,6 +6,25 @@ exact version if you gate CI on the grade.
 
 ## Unreleased
 
+## 0.6.0 - 2026-09-03
+
+**Offline verification and mutation replay now grade the current LUD-25
+MUSTs.** A rotate, split or merge without a valid note signature fails rather
+than warning, as does a byte-identical retry that is answered as already
+spent. The conforming mock now replays mutations by default; `signatures=false`
+and `retriedMutation=refuse` remain explicit adversarial fixtures.
+
+The optional hash lookup is also checked end to end once a mint offers it.
+The runner requires exactly one of `k1` and `h`, compares the unknown-h response
+with an unknown-k1 response, then burns the original note and confirms its hash
+still gets that same unknown-note answer. This catches the privacy leak where a
+mint answers a burned `h` as already spent. The mock gains separate
+`revealsSpent` and `acceptsBoth` fixtures proving those checks fail.
+
+The signature vectors now describe `mintPubkey` as a stable SERVICE key. It may
+be the funding node identity where compatible signing exists, or a dedicated,
+persistent secp256k1 key where it does not.
+
 **The mock mint starts when its path reaches it through a symlink.** The
 standalone guard compared `import.meta.url` against `file://` plus
 `process.argv[1]`, and node resolves a module's URL to its real path while

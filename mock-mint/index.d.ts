@@ -10,6 +10,13 @@ export type WithdrawLinkForm = 'lnurlw' | 'plain'
 
 export type RetriedMutation = 'refuse' | 'replay'
 
+export type HashLookup =
+  | boolean
+  | 'echoesK1'
+  | 'answersUnknown'
+  | 'revealsSpent'
+  | 'acceptsBoth'
+
 /** where a mint claims it accepts an `h` on its pay callback */
 export type MintToHashPlace = 'payRequest' | 'mintAddress' | 'quote'
 
@@ -26,7 +33,7 @@ export interface MockMintOptions {
    * signmessage output unreordered.
    */
   signatureLayout?: SignatureLayout
-  /** withhold sig/sig2 entirely, as a SERVICE with no funding source does */
+  /** non-compliant: withhold the mandatory sig/sig2 */
   signatures?: boolean
   /**
    * How the payRequest spells its withdrawLink. 'plain' (default) is the
@@ -124,14 +131,18 @@ export interface MockMintOptions {
   /**
    * What a retried mutation gets. A rotate, split or merge is a GET and
    * HTTP stacks retry a GET on a dropped connection, so a SERVICE sees
-   * the byte-identical request twice. 'refuse' (default) answers the
-   * second one as an already-spent input; 'replay' answers it with the
-   * original success, which is what stops a holder discarding a note the
-   * SERVICE really did mint. Identical means the same input k1 set, the
+   * the byte-identical request twice. 'replay' (default) returns the
+   * original success as LUD-25 requires; 'refuse' is the non-compliant
+   * fixture. Identical means the same input k1 set, the
    * same h, the same h2 and the same amount; anything else naming a
    * burned input is refused exactly as before.
    */
   retriedMutation?: RetriedMutation
+  /**
+   * Optional informational lookup by sha256(k1). `true` is conforming;
+   * string values reproduce distinct non-compliant responses.
+   */
+  hashLookup?: HashLookup
   /** serve GET /stats, the liabilities endpoint. Off means 404, as before. */
   stats?: boolean
   /** what the node behind a stats-publishing mock claims to hold */
@@ -230,8 +241,8 @@ export interface MockMintState {
   opts: Required<MockMintOptions>
   /**
    * Fund a note directly, bypassing the minting flow. Returns the note's
-   * signature, or undefined when this mint was started with `signatures:
-   * false` (as a SERVICE with no funding source behaves).
+   * signature, or undefined only for the deliberately non-compliant
+   * `signatures: false` fixture.
    *
    * Pass `{previousKey: true}` to sign it under `previousPrivateKey`
    * instead, which is how a case puts one note under the old signing key

@@ -180,14 +180,12 @@ console.log('ok   pre-settlement verify leak caught')
 
 // ---- the optional extensions -------------------------------------------
 //
-// Mint info, liabilities and signing-key rotation are all outside LUD-25
-// and all optional. The grader has to say something useful when they are
-// published and nothing at all when they are not, so both directions are
-// proved here.
+// Mint info and liabilities are optional. Signing-key rotation is exercised
+// here too, because old notes remain valid under published previous keys.
 
 const MINT_INFO_CHECK = 'publishes a mint address (experimental, optional)'
 const LIABILITIES_CHECK = 'publishes liabilities (optional)'
-const SIGNATURE_CHECK = 'signs the notes it issues (optional)'
+const SIGNATURE_CHECK = 'signs the notes it issues'
 
 // a real npub, decoded rather than pattern-matched by the grader
 const npub = bech32.encode('npub', bech32.toWords(new Uint8Array(32).fill(2)), 200)
@@ -282,36 +280,34 @@ if (statusOf(unpublished, SIGNATURE_CHECK) !== 'fail') {
 }
 console.log('ok   a signature under an unpublished key still caught')
 
+const unsigned = await grade({signatures: false})
+if (statusOf(unsigned, SIGNATURE_CHECK) !== 'fail') {
+  die('a mint omitting the mandatory note signature PASSED - the grader is blind')
+}
+console.log('ok   a missing mandatory note signature caught')
+
 // ---- the retried mutation ----------------------------------------------
 //
 // A rotate, split or merge is a GET, and a dropped connection makes an
-// HTTP stack send the byte-identical request again. Refusing the second
-// one as an already-spent input is what the mock has always done, and it
-// is what makes a holder throw away a note the mint really did mint.
+// HTTP stack send the byte-identical request again. The SERVICE must return
+// its original success rather than classifying the retry as a double spend.
 
-const RETRY_CHECK = 'replays a retried mutation rather than refusing it (optional)'
+const RETRY_CHECK = 'replays a retried mutation rather than refusing it'
 const REPLAYED_BURN = 'refuses a replayed burn'
 
-const refusing = await grade({baseFeeMsat: 1000, feePpm: 1000})
-if (statusOf(refusing, RETRY_CHECK) !== 'warn') {
-  die(`a mint refusing a retried mutation did not warn: ${statusOf(refusing, RETRY_CHECK)}`)
+const refusing = await grade({retriedMutation: 'refuse', baseFeeMsat: 1000, feePpm: 1000})
+if (statusOf(refusing, RETRY_CHECK) !== 'fail') {
+  die(`a mint refusing a retried mutation did not fail: ${statusOf(refusing, RETRY_CHECK)}`)
 }
-if (refusing.failed > 0) {
-  console.error('a mint refusing a retried mutation FAILED the grade - the behaviour is a SHOULD:')
-  for (const r of refusing.results.filter(r => r.status === 'fail')) {
-    console.error(`  FAIL ${r.name} - ${r.detail}`)
-  }
-  process.exit(1)
-}
-for (const shape of ['rotate', 'split']) {
-  if (!detailOf(refusing, RETRY_CHECK).includes(shape)) {
-    die(`the retry report does not mention a retried ${shape}: ${detailOf(refusing, RETRY_CHECK)}`)
-  }
+// The combined live check stops at the first mandatory failure, so rotate
+// is the independently observable shape on this refusal fixture.
+if (!detailOf(refusing, RETRY_CHECK).includes('rotate')) {
+  die(`the retry report does not mention the retried rotate: ${detailOf(refusing, RETRY_CHECK)}`)
 }
 if (statusOf(refusing, REPLAYED_BURN) !== 'pass') {
   die(`the replayed-burn check stopped passing: ${detailOf(refusing, REPLAYED_BURN)}`)
 }
-console.log('ok   a mint refusing a retried mutation warns, names both shapes, and still passes')
+console.log('ok   a mint refusing a mandatory mutation replay fails without opening a double spend')
 
 const replaying = await grade({retriedMutation: 'replay', baseFeeMsat: 1000, feePpm: 1000})
 if (replaying.failed > 0) {
@@ -670,6 +666,18 @@ if (!caughtBy(invents, HASH_CHECK)) {
   die('a mint answering for a hash it never registered PASSED - the grader is blind')
 }
 console.log('ok   a hash lookup that answers for an unregistered hash caught')
+
+const revealsSpent = await grade({hashLookup: 'revealsSpent'})
+if (!caughtBy(revealsSpent, 'does not reveal a burned note through hash lookup')) {
+  die('a hash lookup distinguishing a burned hash from an unknown note PASSED - the grader is blind')
+}
+console.log('ok   a hash lookup that reveals a burned note caught')
+
+const acceptsBoth = await grade({hashLookup: 'acceptsBoth'})
+if (!caughtBy(acceptsBoth, HASH_CHECK)) {
+  die('a hash lookup accepting k1 and h together PASSED - the grader is blind')
+}
+console.log('ok   a hash lookup accepting both k1 and h caught')
 
 // ---- the merge cap ----
 //

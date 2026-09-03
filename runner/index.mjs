@@ -886,6 +886,7 @@ export const gradeNote = async (noteUrl, report, options = {}) => {
   // the same answer an unknown `k1` gets, so a mint that never implemented
   // it is indistinguishable from one asked about a note it does not hold.
   // A live note's own hash is therefore the only probe that separates them.
+  let hashLookupOffered = false
   await report.check('answers a note lookup by hash without the secret (optional)', async () => {
     const byHash = new URL(url)
     byHash.searchParams.delete('k1')
@@ -895,6 +896,7 @@ export const gradeNote = async (noteUrl, report, options = {}) => {
     if (body.status === 'ERROR' || body.tag !== 'withdrawRequest') {
       return 'not offered - every informational lookup puts the live secret in a query string, where any proxy that logs full URLs keeps it'
     }
+    hashLookupOffered = true
     // The whole point of the lookup. A wallet asking by hash already holds
     // the secret - it could not have computed the hash otherwise - so the
     // field buys it nothing, and filling it in puts the note back on the
@@ -910,16 +912,37 @@ export const gradeNote = async (noteUrl, report, options = {}) => {
     // An h it never registered must get the unknown-note answer. One that
     // answers anyway reports a note where none exists, and a wallet
     // restoring from seed reads that as a note it has lost the secret to.
+    const unknownSecret = bytesToHex(randomBytes(32))
     const nobody = new URL(url)
     nobody.searchParams.delete('k1')
     nobody.searchParams.delete('amount')
-    nobody.searchParams.set('h', noteId(bytesToHex(randomBytes(32))))
+    nobody.searchParams.set('h', noteId(unknownSecret))
     const invented = await get(nobody)
+    const unknownK1 = new URL(url)
+    unknownK1.searchParams.set('k1', unknownSecret)
+    unknownK1.searchParams.delete('h')
+    unknownK1.searchParams.delete('amount')
+    const ordinaryUnknown = await get(unknownK1)
     assert(
       invented.status === 'ERROR' || invented.tag !== 'withdrawRequest',
       'answered for a hash it never registered - an unrecognized h must get the same response an unknown k1 would'
     )
-    return 'by hash, with no k1 in the reply'
+    assert(
+      invented.status === ordinaryUnknown.status && invented.reason === ordinaryUnknown.reason,
+      `an unknown h answered ${JSON.stringify(invented)} but an unknown k1 answered ${JSON.stringify(ordinaryUnknown)}`
+    )
+
+    // `h` is accepted in place of `k1`, not alongside it. Accepting both
+    // lets an intermediary add a second lookup identity and leaves clients
+    // unable to know which note the response describes.
+    const both = new URL(url)
+    both.searchParams.set('h', noteId(k1))
+    const ambiguous = await get(both)
+    assert(
+      ambiguous.status === 'ERROR',
+      'accepted both k1 and h on one informational lookup - exactly one lookup identity is allowed'
+    )
+    return 'by hash, with no k1 in the reply; unknown and mixed lookups refused'
   })
 
   // The merge cap. LUD-25 bounds a merge by URL length rather than by the
@@ -1011,9 +1034,10 @@ export const gradeNote = async (noteUrl, report, options = {}) => {
     return 'burned the old secret, minted the new'
   })
 
-  await report.check('signs the notes it issues (optional)', async () => {
-    if (!info.mintPubkey) throw soft('no mintPubkey advertised - offline verification unavailable')
-    if (!currentSig) throw soft('mintPubkey advertised but no sig returned')
+  await report.check('signs the notes it issues', async () => {
+    assert(info.mintPubkey, 'no mintPubkey advertised - offline verification is mandatory')
+    assert(isCompressedPubkey(info.mintPubkey), 'mintPubkey is not a 33-byte compressed secp256k1 key')
+    assert(currentSig, 'the rotate returned no sig - offline verification is mandatory')
     // A mint that has rotated its signing key publishes the old ones as
     // previousPubkeys, so notes it issued before the rotation still
     // verify. Any key it currently stands behind is an acceptable signer.
@@ -1029,6 +1053,28 @@ export const gradeNote = async (noteUrl, report, options = {}) => {
     return signedBy === info.mintPubkey
       ? 'verified offline'
       : `verified offline against a previous signing key (${signedBy.slice(0, 16)}...)`
+  })
+
+  await report.check('does not reveal a burned note through hash lookup', async () => {
+    if (!hashLookupOffered) throw soft('hash lookup is not offered')
+    const burned = new URL(url)
+    burned.searchParams.delete('k1')
+    burned.searchParams.delete('amount')
+    burned.searchParams.set('h', noteId(k1))
+    const burnedResponse = await get(burned)
+
+    const unknown = new URL(url)
+    unknown.searchParams.set('k1', bytesToHex(randomBytes(32)))
+    unknown.searchParams.delete('h')
+    unknown.searchParams.delete('amount')
+    const unknownResponse = await get(unknown)
+
+    assert(
+      burnedResponse.status === unknownResponse.status &&
+        burnedResponse.reason === unknownResponse.reason,
+      `a burned h answered ${JSON.stringify(burnedResponse)} but an unknown k1 answered ${JSON.stringify(unknownResponse)}`
+    )
+    return 'burned h is indistinguishable from an unknown note'
   })
 
   await report.check('keeps signatures off the informational endpoint', async () => {
@@ -1260,11 +1306,9 @@ export const gradeNote = async (noteUrl, report, options = {}) => {
   // discards the only copy of a secret the SERVICE really did mint a note
   // against. Nobody is told; the money is simply gone.
   //
-  // Soft, because this is a SHOULD. A SERVICE that has not implemented it
-  // is reported as not having implemented it, not failed. What is NOT
-  // soft is damage: a retry that burns the output, or changes its value,
-  // fails outright whichever answer it gives.
-  await report.check('replays a retried mutation rather than refusing it (optional)', async () => {
+  // This is a MUST. A retry must replay the original success and must not
+  // burn or alter either output.
+  await report.check('replays a retried mutation rather than refusing it', async () => {
     const valueAt = async secret => {
       const u = new URL(url)
       u.searchParams.set('k1', secret)
@@ -1295,22 +1339,18 @@ export const gradeNote = async (noteUrl, report, options = {}) => {
       `the retried rotate changed the note's value: ${minted} -> ${stillThere}`
     )
 
-    const problems = []
-    if (retried.status === 'ERROR') {
-      problems.push(
-        `a retried rotate is answered "${retried.reason}" while the note it minted is live and worth ${stillThere} msat`
-      )
-    } else if (first.sig && retried.sig !== first.sig) {
-      problems.push('a retried rotate replied OK but with a different sig than the original')
-    }
+    assert(
+      retried.status === 'OK',
+      `a retried rotate is answered "${retried.reason}" while the note it minted is live and worth ${stillThere} msat`
+    )
+    assert(retried.sig === first.sig, 'a retried rotate returned a different sig than the original')
 
     // --- a split, retried ---
     // h2 and the change amount are part of what makes a request the same
     // request, so a rotate on its own does not cover it.
     const half = Math.floor(minted / 2)
     if (half < 1 || (knownBaseFee !== null && minted - half < knownBaseFee + 1)) {
-      if (problems.length > 0) throw soft(problems.join('; ') + '; note too small to retry a split')
-      return 'a byte-identical rotate replays; note too small to retry a split'
+      throw soft('a byte-identical rotate replays; note too small to exercise a split retry')
     }
     const a = bytesToHex(randomBytes(32))
     const b = bytesToHex(randomBytes(32))
@@ -1321,8 +1361,7 @@ export const gradeNote = async (noteUrl, report, options = {}) => {
     split.searchParams.append('h2', noteId(b))
     const splitFirst = await get(split)
     if (splitFirst.status !== 'OK') {
-      if (problems.length > 0) throw soft(problems.join('; ') + `; the split itself was refused: ${splitFirst.reason}`)
-      throw soft(`a byte-identical rotate replays; the split itself was refused: ${splitFirst.reason}`)
+      throw new Error(`the split itself was refused: ${splitFirst.reason}`)
     }
     const [va, vb] = [await valueAt(a), await valueAt(b)]
     const splitRetried = await get(split)
@@ -1331,11 +1370,12 @@ export const gradeNote = async (noteUrl, report, options = {}) => {
       va2 === va && vb2 === vb,
       `the retried split changed its outputs: ${va}/${vb} -> ${va2}/${vb2}`
     )
-    if (splitRetried.status === 'ERROR') {
-      problems.push(`a retried split is answered "${splitRetried.reason}" while both its outputs are live`)
-    } else if (splitFirst.sig2 && splitRetried.sig2 !== splitFirst.sig2) {
-      problems.push('a retried split replied OK but with a different sig2 than the original')
-    }
+    assert(
+      splitRetried.status === 'OK',
+      `a retried split is answered "${splitRetried.reason}" while both its outputs are live`
+    )
+    assert(splitRetried.sig === splitFirst.sig, 'a retried split returned a different sig than the original')
+    assert(splitRetried.sig2 === splitFirst.sig2, 'a retried split returned a different sig2 than the original')
 
     // put the two halves back together, so the runner ends holding one note
     const merged = bytesToHex(randomBytes(32))
@@ -1349,7 +1389,6 @@ export const gradeNote = async (noteUrl, report, options = {}) => {
       currentSig = mergeBody.sig ?? null
     }
 
-    if (problems.length > 0) throw soft(problems.join('; '))
     return 'a byte-identical rotate and split both replay the original success'
   })
 

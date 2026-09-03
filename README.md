@@ -92,7 +92,7 @@ must survive:
 | `--echoWrongK1` | answers the informational GET with a different `k1` |
 | `--lieAboutValue=N` | reports a `maxWithdrawable` it never signed |
 | `--signatureLayout=leading` | emits the recovery id at the other end |
-| `--signatures=false` | issues no signatures at all |
+| `--signatures=false` | deliberately violates LUD-25 by issuing no signatures |
 | `--serverGeneratedSecrets` | hands back a secret it generated — the exposure `h` exists to close |
 | `--meltNeverSettles` | holds every melt in flight, so notes stay `pending` |
 | `--meltAlwaysFails` | fails every payment, restoring the note |
@@ -101,6 +101,11 @@ must survive:
 | `--baseFeeMsat=N --feePpm=N` | advertises and withholds a mint fee |
 | `--roundFeeToSat` | rounds the withheld fee up to a whole sat — the note mints short of the formula |
 | `--verifyLeaksEarly` | serves a preimage before settlement, falsely claiming payment proof before payment happened |
+| `--retriedMutation=refuse` | deliberately answers an identical mutation retry as already spent instead of replaying its original success |
+| `--hashLookup=echoesK1` | offers hash lookup but puts a `k1` back in the response |
+| `--hashLookup=answersUnknown` | offers hash lookup but invents a note for an unknown hash |
+| `--hashLookup=revealsSpent` | offers hash lookup but distinguishes a burned hash from an unknown note |
+| `--hashLookup=acceptsBoth` | offers hash lookup but accepts `k1` and `h` together |
 | `--mintToHashAcceptsMalformedH` | claims `mintToHash` and invoices an `h` that is not 64 lowercase hex, so a wallet pays for a quote the mint will refuse |
 | `--mintToHashAcceptsUsedH` | claims it and invoices an `h` that already names a note, an invoice or another quote's output |
 | `--mintToHashIgnoresH` | claims it but accepts `h` and mandatory `comment` naming different outputs |
@@ -108,16 +113,14 @@ must survive:
 The three `mintToHash*` misbehaviours need `--mintToHash` alongside them;
 on their own they do nothing, because a mint that never offered the
 capability cannot misuse it.
-| `--verify=false` | no LUD-21 endpoint at all, not merely unadvertised |
-| `--withdrawLinkForm=lnurlw` | spells `withdrawLink` as `lnurlw://host/w` instead of the plain `https://host/w` the reference mint emits. Both are legal; a client has to take both |
 
-Five behaviours are outside LUD-25 and outside that table, because none
-of them is misbehaviour. All are absent or off unless you ask
-for them, so a mock started with no options answers exactly what it always
-answered:
+The remaining flags enable optional features, legal wire variants, or make a
+conforming default explicit. Optional fields stay absent unless requested:
 
 | Flag | What it does |
 | --- | --- |
+| `--verify=false` | provides no LUD-21 endpoint at all, rather than merely leaving it unadvertised |
+| `--withdrawLinkForm=lnurlw` | spells `withdrawLink` as `lnurlw://host/w` instead of the plain `https://host/w` the reference mint emits. Both are legal; a client has to take both |
 | `--name --description --contact --tosUrl --motd --version` | mint info on the experimental discovery endpoint: who runs this, how to reach them, the terms, and what the operator wants holders to know today |
 | `--baseFeeMsat --feePpm` | also publishes `fees: {baseFeeMsat, feePpm}` on that endpoint, the structured twin of the fee line in the payRequest metadata |
 | `--stats` | serves `GET /stats`: what the mint owes, what is in flight, what the node holds, and the coverage between them |
@@ -125,7 +128,8 @@ answered:
 | `--previousPubkeys=a,b` | keys this mint has signed under before, so notes issued before a rotation still verify |
 | `--previousPrivateKey=<hex>` | an old signing key the mock still holds. Its public half joins `previousPubkeys` on its own |
 | `--signWithPreviousKey` | issues every note under that old key while still advertising the new one: the mid-rotation state a mint passes through when the advertisement moves before the signer |
-| `--retriedMutation=replay` | answers a byte-identical repeat of a mutation with the original success instead of `already spent`. The default, `refuse`, is what this mock has always done |
+| `--retriedMutation=replay` | answers a byte-identical repeat of a mutation with the original success. This is the conforming default; use `refuse` only as an adversarial fixture |
+| `--hashLookup=true` | accepts an informational lookup by `h=sha256(k1)` without returning the bearer secret. Off by default because the capability is optional |
 | `--mintToHash` | accepts `h` alongside the mandatory identical comment and enables the additive quote/receipt fields. Off by default; baseline comment-bound minting remains on |
 | `--mintReceipt` | with `--mintToHash`, adds the optional quote commitment and signed LUD-21 settlement receipt |
 | `--mintToHashAdvertisedOn=quote` | narrows which of the three places claim it (`payRequest`, `mintAddress`, `quote`); all three by default. Changes only what is claimed, never what the mint does |
@@ -223,8 +227,7 @@ advertised `mintPubkey` or any key the mint still publishes as a previous
 one, that split and merge conserve value - exactly,
 under LUD-25's fee algebra, when the mint's fee advertisement is known -
 that a byte-identical repeat of a mutation is answered with the original
-success rather than as an already-spent input (a SHOULD, so a mint that
-has not implemented it is reported as such rather than failed), and that a
+success rather than as an already-spent input, and that a
 burned secret cannot be replayed. It also probes three adversarial shapes a
 mint must refuse atomically: a duplicated `k1` (which a careless mint counts
 twice, minting money from nothing), an output hash that collides with an
