@@ -6,6 +6,7 @@
   "files": [
     "signature.json",
     "derivation.json",
+    "cash-derivation.json",
     "bech32.json",
     "url-admission.json",
     "input-resolution.json",
