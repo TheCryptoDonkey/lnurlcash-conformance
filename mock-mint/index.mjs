@@ -150,12 +150,9 @@ const DEFAULTS = {
   signWithPreviousKey: false,
   // What a retried mutation gets. A rotate, split or merge is a GET, and
   // HTTP stacks retry a GET when the connection they used is dropped, so
-  // a SERVICE sees the byte-identical request twice. 'refuse' answers the
-  // second one as an already-spent input, which is what this mock has
-  // always done and remains the default. 'replay' answers it with the
-  // original success, which is what LUD-25 SHOULD say and what stops a
-  // holder discarding a note the SERVICE really did mint.
-  retriedMutation: 'refuse',
+  // a SERVICE sees the byte-identical request twice. 'replay' is the
+  // conforming default. 'refuse' is retained as the adversarial fixture.
+  retriedMutation: 'replay',
   // Liabilities. Off means 404, exactly as before; on serves GET /stats.
   stats: false,
   // What the node behind a stats-publishing mock claims to hold. Read
@@ -193,6 +190,9 @@ const DEFAULTS = {
   //                      on the wire the lookup existed to keep it off
   //   'answersUnknown' - non-compliant: answers for a hash it never
   //                      registered, instead of the unknown-note refusal
+  //   'revealsSpent'   - non-compliant: distinguishes a burned h from an
+  //                      unknown note
+  //   'acceptsBoth'    - non-compliant: accepts k1 and h together
   hashLookup: false,
   // LUD-25 lets a SERVICE refuse an oversized merge outright rather than
   // let the URL be mangled upstream. 0 is no explicit cap; a positive number
@@ -299,7 +299,7 @@ export const createMockMint = async (options = {}) => {
   // minted. Recorded, never inferred - matching on "a note exists at h"
   // alone would let anyone holding a burned k1 and any outstanding note
   // id pull a success out of the mint.
-  const swaps = new Map() // identity -> [{id, amountMsat}]
+  const swaps = new Map() // identity -> [{id, amountMsat, sig}]
   // Output ids a mint quote has already claimed: h -> the payment hash of
   // the invoice that will credit it. Only ever written when mintToHash is
   // on, so with the option off this is empty and every collision check
@@ -805,13 +805,16 @@ export const createMockMint = async (options = {}) => {
       // `h` is only ever read here, never at the callback, where the same
       // letter means the hash of a NEW note.
       const asked = q.get('h')?.toLowerCase()
+      if (k1 && asked && opts.hashLookup !== 'acceptsBoth') return fail('Unknown note.')
       if (!k1 && asked && opts.hashLookup) {
         if (!/^[0-9a-f]{64}$/.test(asked)) return fail('Unknown note.')
         const held = notes.get(asked)
         const invent = opts.hashLookup === 'answersUnknown' && !held
         if (!invent) {
           if (!held) return fail('Unknown note.')
-          if (held.state === 'burned') return fail('Note already spent.')
+          if (held.state === 'burned') {
+            return fail(opts.hashLookup === 'revealsSpent' ? 'Note already spent.' : 'Unknown note.')
+          }
         }
         return send({
           tag: 'withdrawRequest',
@@ -873,18 +876,16 @@ export const createMockMint = async (options = {}) => {
 
       // The retry branch, before anything is refused for a burned input.
       // This path is a READ: it burns nothing, mints nothing and moves no
-      // balance, so it does not go through finish() either. The signature
-      // is deterministic over (id, amount), so it is recomputed rather
-      // than stored.
+      // balance, so it does not go through finish() either. The exact
+      // signatures are part of the recorded success, including which
+      // published key produced them during a deliberate key rotation.
       if (opts.retriedMutation === 'replay' && !pr) {
         const outputs = swaps.get(swapIdentity(k1s, h, h2, amountRaw))
         if (outputs) {
           const replay = {status: 'OK'}
-          const first = sign(outputs[0].id, outputs[0].amountMsat)
-          if (first) replay.sig = first
+          if (outputs[0].sig) replay.sig = outputs[0].sig
           if (outputs[1]) {
-            const second = sign(outputs[1].id, outputs[1].amountMsat)
-            if (second) replay.sig2 = second
+            if (outputs[1].sig) replay.sig2 = outputs[1].sig
           }
           if (opts.serverGeneratedSecrets) {
             replay.k1 = 'a'.repeat(64)
@@ -1006,8 +1007,8 @@ export const createMockMint = async (options = {}) => {
         const sig = mintNote(h, amount)
         const sig2 = mintNote(h2, change)
         swaps.set(swapIdentity(k1s, h, h2, amountRaw), [
-          {id: h, amountMsat: amount},
-          {id: h2, amountMsat: change}
+          {id: h, amountMsat: amount, sig},
+          {id: h2, amountMsat: change, sig: sig2}
         ])
         const body = {status: 'OK'}
         if (sig) body.sig = sig
@@ -1027,7 +1028,7 @@ export const createMockMint = async (options = {}) => {
       for (const {note} of found) note.state = 'burned'
       const sig = mintNote(h, total + refund)
       swaps.set(swapIdentity(k1s, h, h2, amountRaw), [
-        {id: h, amountMsat: total + refund}
+        {id: h, amountMsat: total + refund, sig}
       ])
       const body = {status: 'OK'}
       if (sig) body.sig = sig

@@ -883,6 +883,40 @@ check('every response case declares a known outcome', () => {
   }
 })
 
+// A consumer drives these cases through a real call, and which call it is
+// changes the answer: a melt mints nothing and so returns no signature,
+// while a rotate that returns none is the unverifiable outcome. An untagged
+// case would be driven through whatever the consumer happened to pick.
+check('every response case names the call it is driven through', () => {
+  const ops = ['mutation', 'split', 'melt']
+  for (const c of responses.cases) {
+    assert(ops.includes(c.op), `${c.name}: op must be one of ${ops.join(', ')}`)
+  }
+  assert(
+    responses.cases.some(c => c.op === 'melt'),
+    'no case is driven through a melt, so nothing proves a melt needs no signature'
+  )
+})
+
+// The signature is what makes a note checkable by whoever receives it, so
+// the vectors have to state it as a requirement rather than leave it as one
+// accepted shape among several.
+check('every accepted withdrawRequest publishes a mintPubkey', () => {
+  const withdrawInfo = load('withdraw-info.json')
+  for (const c of withdrawInfo.accepted) {
+    assert(
+      typeof c.body.mintPubkey === 'string',
+      `${c.name}: an accepted withdrawRequest must carry mintPubkey`
+    )
+  }
+  for (const name of ['no mintPubkey', 'mintPubkey that is not a compressed secp256k1 key']) {
+    assert(
+      withdrawInfo.rejected.some(c => c.name === name),
+      `no rejected case covers "${name}"`
+    )
+  }
+})
+
 check('the pending case uses the exact reason string the spec names', () => {
   const pending = responses.cases.find(c => c.expect === 'pending')
   assert(pending.body.reason === 'pending', `reason was ${JSON.stringify(pending.body.reason)}`)

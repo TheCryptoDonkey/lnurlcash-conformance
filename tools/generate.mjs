@@ -110,7 +110,7 @@ const signature = {
   version: VERSION,
   spec: SPEC,
   description:
-    'Offline verification of a note (LUD-25). A SERVICE signs (note id, amount) with its Lightning node identity key via the standard signmessage wrapping; a holder recovers the pubkey and compares it to mintPubkey without contacting the SERVICE.',
+    'Offline verification of a note (LUD-25). A SERVICE signs (note id, amount) with a stable secp256k1 key it controls; this should be the funding node identity where compatible signing exists, or may be a dedicated persistent SERVICE key otherwise. A holder recovers the pubkey and compares it to the pinned current or previous mintPubkey without contacting the SERVICE.',
   scheme: {
     domainTag: DOMAIN_TAG,
     lightningSignedMessagePrefix: LSM_PREFIX,
@@ -476,7 +476,7 @@ const noteUrl = {
   version: VERSION,
   spec: SPEC,
   description:
-    'A note is an ordinary LUD-03 withdrawRequest URL whose k1 IS the asset. `amount` alongside it is only a claim by whoever encoded the note - the authoritative value is always maxWithdrawable from an informational GET. `sig` is the optional offline-verification signature.',
+    'A note is an ordinary LUD-03 withdrawRequest URL whose k1 IS the asset. `amount` alongside it is only a claim by whoever encoded the note - the authoritative value is always maxWithdrawable from an informational GET. A SERVICE returning a rotate, split or merge MUST include the offline-verification signature in `sig` (and `sig2` for the second split output).',
   parse: [
     {
       url: 'https://mint.example/w?k1=' + K1_A + '&amount=21000',
@@ -922,9 +922,10 @@ const responses = {
   version: VERSION,
   spec: SPEC,
   description:
-    'Classifying a SERVICE response. The distinction that matters for funds is definitive-rejection versus ambiguous-outcome: a parsed {"status":"ERROR"} means the request was processed and refused, while a transport failure, an unparseable body, or a 200 that does not confirm means the mutation MAY have landed - and for rotate/split/merge the WALLET-generated secrets are then the only copy of the outputs, so they must ride the error rather than be discarded.',
+    'Classifying a SERVICE response. The distinction that matters for funds is definitive-rejection versus ambiguous-outcome: a parsed {"status":"ERROR"} means the request was processed and refused, while a transport failure, an unparseable body, or a 200 that does not confirm means the mutation MAY have landed - and for rotate/split/merge the WALLET-generated secrets are then the only copy of the outputs, so they must ride the error rather than be discarded. A confirmed mutation carrying no signature is its own outcome: it definitely landed, so the secrets matter more than ever, and the SERVICE is non-conforming. `op` says which call each case is driven through - a melt is the one mutation with no signature to return.',
   outcomes: {
     ok: 'the operation is confirmed',
+    unverifiable: 'the mutation is confirmed but carries no signature. LUD-25 requires one on every rotate, split and merge, so this SERVICE is non-conforming - but the note EXISTS at the hash the WALLET disclosed, and its secret is the only key to that value. Keep the secret; report the mint',
     pending: 'this k1 has another operation in flight (a melt); retry shortly',
     spent: 'the SERVICE is authoritative that the note is already burned; a holder may lock it as spent',
     unknown: 'the SERVICE does not recognise this note; surface it, do not silently lock it',
@@ -932,9 +933,17 @@ const responses = {
     ambiguous: 'the outcome is not known - preserve any fresh secrets'
   },
   cases: [
-    {name: 'plain success', http: 200, body: {status: 'OK'}, expect: 'ok'},
+    {
+      name: 'plain success',
+      op: 'mutation',
+      http: 200,
+      body: {status: 'OK'},
+      expect: 'unverifiable',
+      why: 'a bare OK was a conforming rotate answer while offline verification was optional. It is not one now: the note is real and the WALLET must keep its secret, but nobody the holder hands it to can check it'
+    },
     {
       name: 'success with an offline-verification signature',
+      op: 'mutation',
       http: 200,
       body: {status: 'OK', sig: 'ab'.repeat(65)},
       expect: 'ok',
@@ -942,6 +951,7 @@ const responses = {
     },
     {
       name: 'split success with both signatures',
+      op: 'split',
       http: 200,
       body: {status: 'OK', sig: 'ab'.repeat(65), sig2: 'cd'.repeat(65)},
       expect: 'ok',
@@ -949,14 +959,24 @@ const responses = {
       changeSignature: 'cd'.repeat(65)
     },
     {
+      name: 'a split that signs only its first output',
+      op: 'split',
+      http: 200,
+      body: {status: 'OK', sig: 'ab'.repeat(65)},
+      expect: 'unverifiable',
+      why: 'both outputs of a split are notes and both need a signature; the change is not a lesser note'
+    },
+    {
       name: 'melt success with a LUD-21 style proof',
+      op: 'melt',
       http: 200,
       body: {status: 'OK', pr: 'lnbc210n1pjq', verify: 'https://mint.example/verify/abc'},
       expect: 'ok',
-      why: 'OK on a melt means the payment is in flight, NOT that the note is confirmed spent'
+      why: 'OK on a melt means the payment is in flight, NOT that the note is confirmed spent. A melt mints nothing, so it has no signature to return and none is required'
     },
     {
       name: 'pending',
+      op: 'mutation',
       http: 200,
       body: {status: 'ERROR', reason: 'pending'},
       expect: 'pending',
@@ -964,24 +984,28 @@ const responses = {
     },
     {
       name: 'already spent',
+      op: 'mutation',
       http: 200,
       body: {status: 'ERROR', reason: 'Note already spent.'},
       expect: 'spent'
     },
     {
       name: 'unknown note',
+      op: 'mutation',
       http: 200,
       body: {status: 'ERROR', reason: 'Unknown note.'},
       expect: 'unknown'
     },
     {
       name: 'not found wording',
+      op: 'mutation',
       http: 200,
       body: {status: 'ERROR', reason: 'k1 not found'},
       expect: 'unknown'
     },
     {
       name: 'ambiguous callback wording is treated as spent',
+      op: 'mutation',
       http: 200,
       body: {status: 'ERROR', reason: 'Invalid or already spent k1.'},
       expect: 'spent',
@@ -989,18 +1013,21 @@ const responses = {
     },
     {
       name: 'some other refusal',
+      op: 'mutation',
       http: 200,
       body: {status: 'ERROR', reason: 'This mint is sunsetting - splits are disabled.'},
       expect: 'error'
     },
     {
       name: 'error with no reason',
+      op: 'mutation',
       http: 200,
       body: {status: 'ERROR'},
       expect: 'error'
     },
     {
       name: '200 with neither OK nor ERROR',
+      op: 'mutation',
       http: 200,
       body: {something: 'else'},
       expect: 'ambiguous',
@@ -1008,23 +1035,27 @@ const responses = {
     },
     {
       name: 'unparseable body',
+      op: 'mutation',
       http: 200,
       bodyRaw: 'not json at all',
       expect: 'ambiguous'
     },
     {
       name: 'server error',
+      op: 'mutation',
       http: 500,
       bodyRaw: 'upstream failure',
       expect: 'ambiguous'
     },
     {
       name: 'transport failure',
+      op: 'mutation',
       transportError: true,
       expect: 'ambiguous'
     },
     {
       name: 'timeout',
+      op: 'mutation',
       timeout: true,
       expect: 'ambiguous'
     }
@@ -1037,60 +1068,71 @@ const withdrawInfo = {
   version: VERSION,
   spec: 'LUD-03, LUD-25',
   description:
-    'The informational GET on a note. Never burns, rotates or alters it. maxWithdrawable is the ONLY authoritative statement of what a note is worth - the URL\'s own `amount` is a claim and the SERVICE ignores it here. The response\'s k1 MUST be the bearer secret itself, never a derived or opaque id.',
+    'The informational GET on a note. Never burns, rotates or alters it. maxWithdrawable is the ONLY authoritative statement of what a note is worth - the URL\'s own `amount` is a claim and the SERVICE ignores it here. The response\'s k1 MUST be the bearer secret itself, never a derived or opaque id. Offline verification is mandatory in the current draft, so the response MUST also carry `mintPubkey`, the stable compressed secp256k1 key the SERVICE\'s note signatures verify against; without it a holder handed a note has nothing to check it against.',
   queriedUrl: 'https://mint.example/w?k1=' + K1_A + '&amount=99999&sig=' + 'ab'.repeat(65),
   requestMustNotSend: ['sig'],
   requestMustSendUnchanged: ['k1'],
   accepted: [
     {
       name: 'minimal valid',
-      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, minWithdrawable: 0, maxWithdrawable: 21000},
-      maxWithdrawable: 21000
-    },
-    {
-      name: 'with a mint pubkey for offline verification',
       body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, minWithdrawable: 0, maxWithdrawable: 21000, mintPubkey: MINT_PUB},
       maxWithdrawable: 21000
     },
     {
       name: 'minWithdrawable omitted',
-      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 21000},
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 21000, mintPubkey: MINT_PUB},
       maxWithdrawable: 21000
     },
     {
       name: 'echoed k1 in a different casing',
-      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A.toUpperCase(), maxWithdrawable: 21000},
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A.toUpperCase(), maxWithdrawable: 21000, mintPubkey: MINT_PUB},
       maxWithdrawable: 21000,
       why: 'k1 is bytes; casing carries no meaning'
     },
     {
+      name: 'mintPubkey in a different casing',
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 21000, mintPubkey: MINT_PUB.toUpperCase()},
+      maxWithdrawable: 21000,
+      why: 'a pubkey is bytes too, and a SERVICE that upper-cases its hex is still naming the same key'
+    },
+    {
       name: 'zero value note',
-      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 0},
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 0, mintPubkey: MINT_PUB},
       maxWithdrawable: 0
     }
   ],
   rejected: [
-    {name: 'wrong tag', body: {tag: 'payRequest', callback: CB, k1: K1_A, maxWithdrawable: 21000}},
-    {name: 'no callback', body: {tag: 'withdrawRequest', k1: K1_A, maxWithdrawable: 21000}},
-    {name: 'no k1', body: {tag: 'withdrawRequest', callback: CB, maxWithdrawable: 21000}},
-    {name: 'no maxWithdrawable', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A}},
-    {name: 'maxWithdrawable is a string', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: '21000'}},
-    {name: 'negative maxWithdrawable', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: -1}},
+    {name: 'wrong tag', body: {tag: 'payRequest', callback: CB, k1: K1_A, maxWithdrawable: 21000, mintPubkey: MINT_PUB}},
+    {name: 'no callback', body: {tag: 'withdrawRequest', k1: K1_A, maxWithdrawable: 21000, mintPubkey: MINT_PUB}},
+    {name: 'no k1', body: {tag: 'withdrawRequest', callback: CB, maxWithdrawable: 21000, mintPubkey: MINT_PUB}},
+    {name: 'no maxWithdrawable', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, mintPubkey: MINT_PUB}},
+    {name: 'maxWithdrawable is a string', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: '21000', mintPubkey: MINT_PUB}},
+    {name: 'negative maxWithdrawable', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: -1, mintPubkey: MINT_PUB}},
     {
       name: 'fractional maxWithdrawable',
-      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 21000.5},
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 21000.5, mintPubkey: MINT_PUB},
       why: 'msat are integers'
     },
     {
       name: 'maxWithdrawable past 2^63',
-      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 2 ** 64},
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 2 ** 64, mintPubkey: MINT_PUB},
       why: 'no common integer type holds it and a double rounds it - refuse rather than guess the amount'
     },
-    {name: 'minWithdrawable above maxWithdrawable', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, minWithdrawable: 30000, maxWithdrawable: 21000}},
+    {name: 'minWithdrawable above maxWithdrawable', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, minWithdrawable: 30000, maxWithdrawable: 21000, mintPubkey: MINT_PUB}},
     {
       name: 'echoed a different k1 than queried',
-      body: {tag: 'withdrawRequest', callback: CB, k1: K1_B, maxWithdrawable: 21000},
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_B, maxWithdrawable: 21000, mintPubkey: MINT_PUB},
       why: 'spec MUST: the response k1 is the bearer secret itself. A SERVICE returning something else is non-compliant, or the note was rotated by someone else'
+    },
+    {
+      name: 'no mintPubkey',
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, minWithdrawable: 0, maxWithdrawable: 21000},
+      why: 'offline verification is mandatory. Without the key a note signature verifies against nothing, and whoever is handed the note is back to the leap of faith the signature exists to remove'
+    },
+    {
+      name: 'mintPubkey that is not a compressed secp256k1 key',
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 21000, mintPubkey: MINT_PUB.slice(2)},
+      why: 'an x-only key, a node URI or a truncated hex string verifies nothing. Refused at the response rather than at the first signature check, where the same fault would look like a forged note'
     }
   ]
 }
@@ -1338,7 +1380,7 @@ const lifecycle = {
         'the HTTP stack silently resends the identical request'
       ],
       requirement:
-        'a WALLET MUST ensure its HTTP stack does not retry a mutating callback. Every mutation is a GET, HTTP treats GET as idempotent, and an LNURLcash mutation is not: the first attempt burns the input. A retried mutation is answered "invalid or already spent k1", which classifies as a DEFINITIVE rejection - so the WALLET concludes nothing happened and discards the fresh secret that was the only copy of the note the SERVICE just minted. This is not hypothetical: it was found in two independent implementations during this suite\'s own development. Java\'s java.net.http.HttpClient retries idempotent GETs on a mid-flight connection reset and cannot be configured out of it (use a client that can); Go\'s net/http retries when the request went over a REUSED connection, and a client with no explicit Transport shares a process-wide pool, so the behaviour depends on what unrelated code did first (disable keep-alives). Browsers retry on a stale pooled connection for the same reason. Test this deliberately: the mock mint\'s dropAfterMutation mode reproduces it.'
+        'a SERVICE MUST recognize the byte-identical retry from the same k1 set, h, h2 and amount, and return the original success with the same sig and sig2 without moving balance again. A WALLET still persists every fresh output secret before sending the first request and keeps it across an ambiguous transport failure. A request that changes any recorded field is a genuine double-spend attempt and gets the ordinary already-spent refusal.'
     },
     {
       name: 'settle a merge or split output',
@@ -1705,7 +1747,7 @@ const retriedMutation = {
   version: VERSION,
   spec: SPEC,
   description:
-    'What counts as a retry of a mutation, and what is still a double-spend attempt. Every mutation in LUD-25 is a GET, and HTTP stacks retry a GET when the connection they used is dropped, so a SERVICE sees the byte-identical request twice and the second one arrives with its inputs already burned. A SERVICE that answers the retry as an already-spent input tells the holder the mutation never happened, and the holder discards the only copy of a secret the SERVICE really did mint a note against. Replaying the original success instead is a SHOULD, not a MUST: a SERVICE that has not implemented it is not broken, but a SERVICE that has must draw the line in exactly this place, or two SERVICEs give the same wallet two different answers to the same dropped connection. The replay path is a read - it burns nothing, mints nothing and moves no balance - and the signature is deterministic over the output id and amount, so it is recomputed rather than stored. Anything that is NOT a retry and names a burned input is refused exactly as an ordinary double-spend is, with the same reason string, so no oracle appears for whoever is holding a burned secret.',
+    'What counts as a retry of a mutation, and what is still a double-spend attempt. Every mutation in LUD-25 is a GET, and HTTP stacks retry a GET when the connection they used is dropped, so a SERVICE sees the byte-identical request twice and the second one arrives with its inputs already burned. A SERVICE that answers the retry as an already-spent input tells the holder the mutation never happened, and the holder discards the only copy of a secret the SERVICE really did mint a note against. Replaying the original success is therefore a MUST. The replay path is a read: it burns nothing, mints nothing and moves no balance, and returns the same signature or signatures. Anything that is NOT a retry and names a burned input is refused exactly as an ordinary double-spend is, with the same reason string, so no oracle appears for whoever is holding a burned secret.',
   identity: [
     'the same input k1 set, compared as a SET: a merge naming the same notes in a different order is the same merge',
     'the same h',

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "spec": "LUD-25 draft (lnurl/luds#301)",
-  "description": "Offline verification of a note (LUD-25). A SERVICE signs (note id, amount) with its Lightning node identity key via the standard signmessage wrapping; a holder recovers the pubkey and compares it to mintPubkey without contacting the SERVICE.",
+  "description": "Offline verification of a note (LUD-25). A SERVICE signs (note id, amount) with a stable secp256k1 key it controls; this should be the funding node identity where compatible signing exists, or may be a dedicated persistent SERVICE key otherwise. A holder recovers the pubkey and compares it to the pinned current or previous mintPubkey without contacting the SERVICE.",
   "scheme": {
     "domainTag": "LNURLcash",
     "lightningSignedMessagePrefix": "Lightning Signed Message:",
