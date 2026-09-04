@@ -6,6 +6,8 @@ exact version if you gate CI on the grade.
 
 ## Unreleased
 
+## 0.7.0 - 2026-09-04
+
 **`cash-derivation.json`: LUD-25's own seed-recoverable note secrets.** The
 draft specifies a BIP-32 scheme under `m/139'` and the reference wallet
 implements it; `derivation.json` remains, unchanged, as the pre-spec HMAC
