@@ -1,0 +1,160 @@
+{
+  "version": 1,
+  "spec": "LUD-25 draft (lnurl/luds#301)",
+  "description": "LUD-25's specified seed-recoverable note secrets, the BIP-32 scheme under m/139'. cashRoot is m/139' as privateKey||chainCode hex (64 bytes, no version/depth/fingerprint framing). domainIndices are the four raw uint32 read big-endian from the first 16 bytes of HMAC-SHA256(key = the private key at m/139'/0, msg = utf8(host)); they are used as BIP-32 child indices exactly as they fall, so `hardened` records which of them land >= 2^31 by magnitude - an implementation that masks the top bit or hardens all four derives a different tree and will restore nothing. domainNode is m/139'/d1/d2/d3/d4. k1 is the private key at the hardened child `index` of that node, 32 bytes lowercase hex, and the mint sees only sha256(k1) as ever. host is the mint host exactly as the wallet stores it, with the port when there is one. seedHex is the 64-byte BIP39 seed with no passphrase. bip32Vector1 is BIP-32's own published test vector 1, so CKDpriv itself can be checked first.",
+  "scheme": {
+    "purpose": "m/139'",
+    "hashingKey": "m/139'/0",
+    "domainMsg": "host",
+    "secretPath": "m/139'/d1/d2/d3/d4/i'",
+    "hardenedByMagnitudeOnly": true
+  },
+  "bip32Vector1": [
+    {
+      "index": null,
+      "node": "e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35873dff81c02f525623fd1fe5167eac3a55a049de3d314bb42ee227ffed37d508"
+    },
+    {
+      "index": 2147483648,
+      "hardened": true,
+      "node": "edb2e14f9ee77d26dd93b4ecede8d16ed408ce149b6cd80b0715a2d911a0afea47fdacbd0f1097043b78c63c20c34ef4ed9a111d980047ad16282c7ae6236141"
+    },
+    {
+      "index": 1,
+      "hardened": false,
+      "node": "3c6cb8d0f6a264c91ea8b5030fadaa8e538b020f0a387421a12de9319dc933682a7857631386ba23dacac34180dd1983734e444fdbf774041578e9b6adb37c19"
+    },
+    {
+      "index": 2147483650,
+      "hardened": true,
+      "node": "cbce0d719ecf7431d88e6a89fa1483e02e35092af60c042b1df2ff59fa424dca04466b9cc8e161e966409ca52986c584f07e9dc81f735db683c3ff6ec7b1503f"
+    },
+    {
+      "index": 2,
+      "hardened": false,
+      "node": "0f479245fb19a38a1954c5c7c0ebab2f9bdfd96a17563ef28a6a4b1a2a764ef4cfb71883f01676f587d023cc53a35bc7f88f724b1f8c2892ac1275ac822a3edd"
+    },
+    {
+      "index": 1000000000,
+      "hardened": false,
+      "node": "471b76e389e528d6de6d816857e012c5455051cad6660850e58372a6c3e6e7c8c783e67b921d2beb8f6b389cc646d7263b4145701dadd2161548a8b078e65e9e"
+    }
+  ],
+  "cases": [
+    {
+      "name": "standard mnemonic, index 0",
+      "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+      "seedHex": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+      "host": "mint.example",
+      "index": 0,
+      "cashRoot": "c7a2496e9b453a67c5d2a1f04936ec1259440d45454c795a99a66269e4cd3005111e1cc966fca2fe32f054f14caceab90449e536d94cf6935ea12a087e414f60",
+      "domainIndices": [
+        2589708612,
+        3693348916,
+        172082394,
+        3793182078
+      ],
+      "hardened": [
+        true,
+        true,
+        false,
+        true
+      ],
+      "domainNode": "72056e5cde21458b13689c3950904dfd327415a506d064290e5e5f4296a40543dd5e9504ddb6eefbafa4ad3b00ad421858fafc0ed9ea4abd9cb68793f845cfc1",
+      "k1": "de5b81405a12e1297b350d80e2ad85043ed5b9436a0c5592d3302778de330499",
+      "noteId": "7db9da2845cd45c1c3c2e302d6135da46823e245f756b830ef59ac324b769e02"
+    },
+    {
+      "name": "standard mnemonic, index 1",
+      "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+      "seedHex": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+      "host": "mint.example",
+      "index": 1,
+      "cashRoot": "c7a2496e9b453a67c5d2a1f04936ec1259440d45454c795a99a66269e4cd3005111e1cc966fca2fe32f054f14caceab90449e536d94cf6935ea12a087e414f60",
+      "domainIndices": [
+        2589708612,
+        3693348916,
+        172082394,
+        3793182078
+      ],
+      "hardened": [
+        true,
+        true,
+        false,
+        true
+      ],
+      "domainNode": "72056e5cde21458b13689c3950904dfd327415a506d064290e5e5f4296a40543dd5e9504ddb6eefbafa4ad3b00ad421858fafc0ed9ea4abd9cb68793f845cfc1",
+      "k1": "267570df5ba8098d728e839a698f729c2df6fa7b8b7ae7c9c7ffa7dda3417e1d",
+      "noteId": "99b98cb845940e0d6401e176aaca1446365aa315201803861e17f3c530ed1dcf"
+    },
+    {
+      "name": "standard mnemonic, index 20 (one past a 20-index gap limit)",
+      "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+      "seedHex": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+      "host": "mint.example",
+      "index": 20,
+      "cashRoot": "c7a2496e9b453a67c5d2a1f04936ec1259440d45454c795a99a66269e4cd3005111e1cc966fca2fe32f054f14caceab90449e536d94cf6935ea12a087e414f60",
+      "domainIndices": [
+        2589708612,
+        3693348916,
+        172082394,
+        3793182078
+      ],
+      "hardened": [
+        true,
+        true,
+        false,
+        true
+      ],
+      "domainNode": "72056e5cde21458b13689c3950904dfd327415a506d064290e5e5f4296a40543dd5e9504ddb6eefbafa4ad3b00ad421858fafc0ed9ea4abd9cb68793f845cfc1",
+      "k1": "1f2b8080d4c9431b1dec780abb4eee3c4aaf7ff03f7dd126a7e005ec7af372e0",
+      "noteId": "0daebdd7f9355a215c511cadc96e73f586e07238c352b43b21c080713b79cbfc"
+    },
+    {
+      "name": "a second mnemonic, same host and index",
+      "mnemonic": "legal winner thank year wave sausage worth useful legal winner thank yellow",
+      "seedHex": "878386efb78845b3355bd15ea4d39ef97d179cb712b77d5c12b6be415fffeffe5f377ba02bf3f8544ab800b955e51fbff09828f682052a20faa6addbbddfb096",
+      "host": "mint.example",
+      "index": 0,
+      "cashRoot": "e58252908e0c10965d15d1e3894cbf206a2102c20eb9519e466e2e0e852075d430afaa22bb69ef2151cdffacc463e51068e854152b0b7c08fa2f93e6b8d16741",
+      "domainIndices": [
+        3862277158,
+        545631060,
+        182776155,
+        2195829862
+      ],
+      "hardened": [
+        true,
+        false,
+        false,
+        true
+      ],
+      "domainNode": "df3c9156afc2e416286df9bbfda49c6ab72305ba3d65ae0b7e2214caf581b111959d96bc0c075185ff7304214496a78f43b22ea511f97a7bf408454a7e3d3a85",
+      "k1": "d5376fa38f01b39d55be6dc0ea8f3aa6b91f37c183c5a394bb7e30b624855a78",
+      "noteId": "5b4ba51285373e8a8c0414e6b3607ea0a6b70968c94f2b9f73ffdfdedfba1c15"
+    },
+    {
+      "name": "a host carrying a port",
+      "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+      "seedHex": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+      "host": "127.0.0.1:8899",
+      "index": 0,
+      "cashRoot": "c7a2496e9b453a67c5d2a1f04936ec1259440d45454c795a99a66269e4cd3005111e1cc966fca2fe32f054f14caceab90449e536d94cf6935ea12a087e414f60",
+      "domainIndices": [
+        2087962263,
+        3073061246,
+        2281736429,
+        1205328740
+      ],
+      "hardened": [
+        false,
+        true,
+        true,
+        false
+      ],
+      "domainNode": "80bdd2d71f0235bd9e22d5838a4a4f346cf5415309ada559942a409a630e102ce214425b89b36d03d4835fdf6592d2619c74d37b746711b4ed85759ea1d358a6",
+      "k1": "d7bcc5c9e7015ca2688ed10e24db3f82163d5b59fc887e5dd346abf2426b1270",
+      "noteId": "1a8a732d7ec9811654183ecbb27b1887dec947a42c877a12bd93f952837a3887"
+    }
+  ]
+}

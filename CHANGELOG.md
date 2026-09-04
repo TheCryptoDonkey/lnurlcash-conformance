@@ -6,6 +6,25 @@ exact version if you gate CI on the grade.
 
 ## Unreleased
 
+**`cash-derivation.json`: LUD-25's own seed-recoverable note secrets.** The
+draft specifies a BIP-32 scheme under `m/139'` and the reference wallet
+implements it; `derivation.json` remains, unchanged, as the pre-spec HMAC
+scheme that notes are still outstanding under.
+
+Every case carries `cashRoot`, the four `domainIndices`, a `hardened` flag per
+index, the `domainNode` and the resulting `k1`. The flags are the point of the
+file. `d1..d4` are raw uint32 and BIP-32 reads any index `>= 2^31` as hardened,
+so which levels are hardened is decided by the mint's own host name - an
+implementation that masks the top bit, or hardens all four, derives a
+different tree and restores nothing, silently. Both hosts in the vector land
+on a mix, so an implementation that gets it wrong cannot pass by luck.
+
+`bip32Vector1` carries BIP-32's own published test vector 1, so a port can
+prove its CKDpriv before blaming the LUD-25 path above it. The generator
+implements BIP-32 from `@noble` primitives rather than importing a BIP-32
+library, for the reason at the top of `tools/generate.mjs`: a vector produced
+by the library under test proves nothing.
+
 ## 0.6.0 - 2026-09-03
 
 **Offline verification and mutation replay now grade the current LUD-25

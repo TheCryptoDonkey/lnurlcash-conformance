@@ -14,7 +14,7 @@ import {writeFileSync, mkdirSync} from 'node:fs'
 import {dirname, join} from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {bech32, base64urlnopad} from '@scure/base'
-import {sha256} from '@noble/hashes/sha2.js'
+import {sha256, sha512} from '@noble/hashes/sha2.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
 import {hmac} from '@noble/hashes/hmac.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
@@ -354,6 +354,130 @@ const derivation = {
     ),
     derivationCase('a second mnemonic, same host and index', MNEMONIC_B, 'mint.example', 0),
     derivationCase('a host carrying a port', MNEMONIC_A, '127.0.0.1:8899', 0)
+  ]
+}
+
+
+// ---- vectors: cash derivation (LUD-25's own m/139' scheme) ----------------
+
+// The scheme LUD-25's "Seed-recoverable note secrets" section actually
+// specifies, as opposed to the HMAC one above, which predates it and is kept
+// only so notes minted under it stay findable:
+//
+//   cashHashingKey   = derive(masterKey, m/139'/0)
+//   domainMaterial   = hmacSha256(cashHashingKey, full SERVICE domain)
+//   (d1, d2, d3, d4) = first 16 bytes of domainMaterial as 4 uint32
+//   secret_i         = derive(masterKey, m/139'/d1/d2/d3/d4/i')
+//
+// The one thing that has to be pinned, and the reason `hardened` is spelled
+// out per case below: d1..d4 are RAW uint32, and BIP-32 already reads any
+// index >= 2^31 as hardened. They are used exactly as they fall - nothing
+// masked, nothing forced - so which levels are hardened is decided by the
+// mint's own host name. That is "exactly as LUD-05" and it is what the
+// reference wallet does. An implementation that masks the top bit, or that
+// hardens all four, derives a different tree and restores nothing.
+//
+// BIP-32 is implemented here from its own primitives rather than pulled in,
+// for the reason at the top of this file: a vector produced by the same
+// library an implementation uses proves nothing. `bip32Vector1` below is
+// BIP-32's own published test vector, so the primitive is checkable before
+// any of the LUD-25 values are.
+
+const HARDENED = 0x80000000
+const CURVE_N = secp256k1.Point.Fn.ORDER
+const bytesToNumber = bytes => BigInt(`0x${bytesToHex(bytes)}`)
+const numberTo32 = value => hexToBytes(value.toString(16).padStart(64, '0'))
+
+const ckdPriv = ({privateKey, chainCode}, index) => {
+  const data = new Uint8Array(37)
+  if (index >= HARDENED) {
+    data.set(privateKey, 1)
+  } else {
+    data.set(secp256k1.Point.BASE.multiply(bytesToNumber(privateKey)).toBytes(true), 0)
+  }
+  new DataView(data.buffer).setUint32(33, index, false)
+  const material = hmac(sha512, chainCode, data)
+  const left = bytesToNumber(material.subarray(0, 32))
+  const key = (left + bytesToNumber(privateKey)) % CURVE_N
+  if (left >= CURVE_N || key === 0n) throw new Error(`invalid child at ${index}`)
+  return {privateKey: numberTo32(key), chainCode: material.slice(32)}
+}
+
+const masterOf = seed => {
+  const material = hmac(sha512, utf8ToBytes('Bitcoin seed'), seed)
+  return {privateKey: material.slice(0, 32), chainCode: material.slice(32)}
+}
+
+const nodeHex = node => bytesToHex(node.privateKey) + bytesToHex(node.chainCode)
+
+const cashRootOf = seed => ckdPriv(masterOf(seed), 139 + HARDENED)
+
+const readUint32BE = (bytes, offset) =>
+  new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(offset, false)
+
+const cashDomainIndices = (cashRoot, host) => {
+  const material = hmac(sha256, ckdPriv(cashRoot, 0).privateKey, utf8ToBytes(host))
+  return [0, 4, 8, 12].map(offset => readUint32BE(material, offset))
+}
+
+const cashDomainNode = (cashRoot, host) =>
+  cashDomainIndices(cashRoot, host).reduce(ckdPriv, cashRoot)
+
+const cashCase = (name, mnemonic, host, index) => {
+  const seed = seedOf(mnemonic)
+  const cashRoot = cashRootOf(seed)
+  const indices = cashDomainIndices(cashRoot, host)
+  const k1 = bytesToHex(
+    ckdPriv(cashDomainNode(cashRoot, host), index + HARDENED).privateKey
+  )
+  return {
+    name,
+    mnemonic,
+    seedHex: bytesToHex(seed),
+    host,
+    index,
+    cashRoot: nodeHex(cashRoot),
+    domainIndices: indices,
+    hardened: indices.map(i => i >= HARDENED),
+    domainNode: nodeHex(cashDomainNode(cashRoot, host)),
+    k1,
+    noteId: noteId(k1)
+  }
+}
+
+// BIP-32 test vector 1, chain m -> m/0' -> m/0'/1 -> ... Included so an
+// implementation can prove its CKDpriv before blaming the LUD-25 path for a
+// mismatch, and because the chain alternates hardened and unhardened, which
+// is exactly the pair of legs the domain levels can land on.
+const bip32Vector1 = () => {
+  let node = masterOf(hexToBytes('000102030405060708090a0b0c0d0e0f'))
+  const steps = [{index: null, node: nodeHex(node)}]
+  for (const index of [HARDENED, 1, HARDENED + 2, 2, 1000000000]) {
+    node = ckdPriv(node, index)
+    steps.push({index, hardened: index >= HARDENED, node: nodeHex(node)})
+  }
+  return steps
+}
+
+const cashDerivation = {
+  version: VERSION,
+  spec: SPEC,
+  description:
+    "LUD-25's specified seed-recoverable note secrets, the BIP-32 scheme under m/139'. cashRoot is m/139' as privateKey||chainCode hex (64 bytes, no version/depth/fingerprint framing). domainIndices are the four raw uint32 read big-endian from the first 16 bytes of HMAC-SHA256(key = the private key at m/139'/0, msg = utf8(host)); they are used as BIP-32 child indices exactly as they fall, so `hardened` records which of them land >= 2^31 by magnitude - an implementation that masks the top bit or hardens all four derives a different tree and will restore nothing. domainNode is m/139'/d1/d2/d3/d4. k1 is the private key at the hardened child `index` of that node, 32 bytes lowercase hex, and the mint sees only sha256(k1) as ever. host is the mint host exactly as the wallet stores it, with the port when there is one. seedHex is the 64-byte BIP39 seed with no passphrase. bip32Vector1 is BIP-32's own published test vector 1, so CKDpriv itself can be checked first.",
+  scheme: {
+    purpose: "m/139'",
+    hashingKey: "m/139'/0",
+    domainMsg: 'host',
+    secretPath: "m/139'/d1/d2/d3/d4/i'",
+    hardenedByMagnitudeOnly: true
+  },
+  bip32Vector1: bip32Vector1(),
+  cases: [
+    cashCase("standard mnemonic, index 0", MNEMONIC_A, 'mint.example', 0),
+    cashCase("standard mnemonic, index 1", MNEMONIC_A, 'mint.example', 1),
+    cashCase("standard mnemonic, index 20 (one past a 20-index gap limit)", MNEMONIC_A, 'mint.example', 20),
+    cashCase('a second mnemonic, same host and index', MNEMONIC_B, 'mint.example', 0),
+    cashCase('a host carrying a port', MNEMONIC_A, '127.0.0.1:8899', 0)
   ]
 }
 
@@ -2582,6 +2706,7 @@ const settleForValue = {
 const files = [
   write('signature.json', signature),
   write('derivation.json', derivation),
+  write('cash-derivation.json', cashDerivation),
   write('bech32.json', bech32Vectors),
   write('url-admission.json', urlAdmission),
   write('input-resolution.json', inputResolution),
