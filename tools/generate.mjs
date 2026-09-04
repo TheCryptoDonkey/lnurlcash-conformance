@@ -922,9 +922,10 @@ const responses = {
   version: VERSION,
   spec: SPEC,
   description:
-    'Classifying a SERVICE response. The distinction that matters for funds is definitive-rejection versus ambiguous-outcome: a parsed {"status":"ERROR"} means the request was processed and refused, while a transport failure, an unparseable body, or a 200 that does not confirm means the mutation MAY have landed - and for rotate/split/merge the WALLET-generated secrets are then the only copy of the outputs, so they must ride the error rather than be discarded.',
+    'Classifying a SERVICE response. The distinction that matters for funds is definitive-rejection versus ambiguous-outcome: a parsed {"status":"ERROR"} means the request was processed and refused, while a transport failure, an unparseable body, or a 200 that does not confirm means the mutation MAY have landed - and for rotate/split/merge the WALLET-generated secrets are then the only copy of the outputs, so they must ride the error rather than be discarded. A confirmed mutation carrying no signature is its own outcome: it definitely landed, so the secrets matter more than ever, and the SERVICE is non-conforming. `op` says which call each case is driven through - a melt is the one mutation with no signature to return.',
   outcomes: {
     ok: 'the operation is confirmed',
+    unverifiable: 'the mutation is confirmed but carries no signature. LUD-25 requires one on every rotate, split and merge, so this SERVICE is non-conforming - but the note EXISTS at the hash the WALLET disclosed, and its secret is the only key to that value. Keep the secret; report the mint',
     pending: 'this k1 has another operation in flight (a melt); retry shortly',
     spent: 'the SERVICE is authoritative that the note is already burned; a holder may lock it as spent',
     unknown: 'the SERVICE does not recognise this note; surface it, do not silently lock it',
@@ -932,9 +933,17 @@ const responses = {
     ambiguous: 'the outcome is not known - preserve any fresh secrets'
   },
   cases: [
-    {name: 'plain success', http: 200, body: {status: 'OK'}, expect: 'ok'},
+    {
+      name: 'plain success',
+      op: 'mutation',
+      http: 200,
+      body: {status: 'OK'},
+      expect: 'unverifiable',
+      why: 'a bare OK was a conforming rotate answer while offline verification was optional. It is not one now: the note is real and the WALLET must keep its secret, but nobody the holder hands it to can check it'
+    },
     {
       name: 'success with an offline-verification signature',
+      op: 'mutation',
       http: 200,
       body: {status: 'OK', sig: 'ab'.repeat(65)},
       expect: 'ok',
@@ -942,6 +951,7 @@ const responses = {
     },
     {
       name: 'split success with both signatures',
+      op: 'split',
       http: 200,
       body: {status: 'OK', sig: 'ab'.repeat(65), sig2: 'cd'.repeat(65)},
       expect: 'ok',
@@ -949,14 +959,24 @@ const responses = {
       changeSignature: 'cd'.repeat(65)
     },
     {
+      name: 'a split that signs only its first output',
+      op: 'split',
+      http: 200,
+      body: {status: 'OK', sig: 'ab'.repeat(65)},
+      expect: 'unverifiable',
+      why: 'both outputs of a split are notes and both need a signature; the change is not a lesser note'
+    },
+    {
       name: 'melt success with a LUD-21 style proof',
+      op: 'melt',
       http: 200,
       body: {status: 'OK', pr: 'lnbc210n1pjq', verify: 'https://mint.example/verify/abc'},
       expect: 'ok',
-      why: 'OK on a melt means the payment is in flight, NOT that the note is confirmed spent'
+      why: 'OK on a melt means the payment is in flight, NOT that the note is confirmed spent. A melt mints nothing, so it has no signature to return and none is required'
     },
     {
       name: 'pending',
+      op: 'mutation',
       http: 200,
       body: {status: 'ERROR', reason: 'pending'},
       expect: 'pending',
@@ -964,24 +984,28 @@ const responses = {
     },
     {
       name: 'already spent',
+      op: 'mutation',
       http: 200,
       body: {status: 'ERROR', reason: 'Note already spent.'},
       expect: 'spent'
     },
     {
       name: 'unknown note',
+      op: 'mutation',
       http: 200,
       body: {status: 'ERROR', reason: 'Unknown note.'},
       expect: 'unknown'
     },
     {
       name: 'not found wording',
+      op: 'mutation',
       http: 200,
       body: {status: 'ERROR', reason: 'k1 not found'},
       expect: 'unknown'
     },
     {
       name: 'ambiguous callback wording is treated as spent',
+      op: 'mutation',
       http: 200,
       body: {status: 'ERROR', reason: 'Invalid or already spent k1.'},
       expect: 'spent',
@@ -989,18 +1013,21 @@ const responses = {
     },
     {
       name: 'some other refusal',
+      op: 'mutation',
       http: 200,
       body: {status: 'ERROR', reason: 'This mint is sunsetting - splits are disabled.'},
       expect: 'error'
     },
     {
       name: 'error with no reason',
+      op: 'mutation',
       http: 200,
       body: {status: 'ERROR'},
       expect: 'error'
     },
     {
       name: '200 with neither OK nor ERROR',
+      op: 'mutation',
       http: 200,
       body: {something: 'else'},
       expect: 'ambiguous',
@@ -1008,23 +1035,27 @@ const responses = {
     },
     {
       name: 'unparseable body',
+      op: 'mutation',
       http: 200,
       bodyRaw: 'not json at all',
       expect: 'ambiguous'
     },
     {
       name: 'server error',
+      op: 'mutation',
       http: 500,
       bodyRaw: 'upstream failure',
       expect: 'ambiguous'
     },
     {
       name: 'transport failure',
+      op: 'mutation',
       transportError: true,
       expect: 'ambiguous'
     },
     {
       name: 'timeout',
+      op: 'mutation',
       timeout: true,
       expect: 'ambiguous'
     }
@@ -1037,60 +1068,71 @@ const withdrawInfo = {
   version: VERSION,
   spec: 'LUD-03, LUD-25',
   description:
-    'The informational GET on a note. Never burns, rotates or alters it. maxWithdrawable is the ONLY authoritative statement of what a note is worth - the URL\'s own `amount` is a claim and the SERVICE ignores it here. The response\'s k1 MUST be the bearer secret itself, never a derived or opaque id.',
+    'The informational GET on a note. Never burns, rotates or alters it. maxWithdrawable is the ONLY authoritative statement of what a note is worth - the URL\'s own `amount` is a claim and the SERVICE ignores it here. The response\'s k1 MUST be the bearer secret itself, never a derived or opaque id. Offline verification is mandatory in the current draft, so the response MUST also carry `mintPubkey`, the stable compressed secp256k1 key the SERVICE\'s note signatures verify against; without it a holder handed a note has nothing to check it against.',
   queriedUrl: 'https://mint.example/w?k1=' + K1_A + '&amount=99999&sig=' + 'ab'.repeat(65),
   requestMustNotSend: ['sig'],
   requestMustSendUnchanged: ['k1'],
   accepted: [
     {
       name: 'minimal valid',
-      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, minWithdrawable: 0, maxWithdrawable: 21000},
-      maxWithdrawable: 21000
-    },
-    {
-      name: 'with a mint pubkey for offline verification',
       body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, minWithdrawable: 0, maxWithdrawable: 21000, mintPubkey: MINT_PUB},
       maxWithdrawable: 21000
     },
     {
       name: 'minWithdrawable omitted',
-      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 21000},
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 21000, mintPubkey: MINT_PUB},
       maxWithdrawable: 21000
     },
     {
       name: 'echoed k1 in a different casing',
-      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A.toUpperCase(), maxWithdrawable: 21000},
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A.toUpperCase(), maxWithdrawable: 21000, mintPubkey: MINT_PUB},
       maxWithdrawable: 21000,
       why: 'k1 is bytes; casing carries no meaning'
     },
     {
+      name: 'mintPubkey in a different casing',
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 21000, mintPubkey: MINT_PUB.toUpperCase()},
+      maxWithdrawable: 21000,
+      why: 'a pubkey is bytes too, and a SERVICE that upper-cases its hex is still naming the same key'
+    },
+    {
       name: 'zero value note',
-      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 0},
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 0, mintPubkey: MINT_PUB},
       maxWithdrawable: 0
     }
   ],
   rejected: [
-    {name: 'wrong tag', body: {tag: 'payRequest', callback: CB, k1: K1_A, maxWithdrawable: 21000}},
-    {name: 'no callback', body: {tag: 'withdrawRequest', k1: K1_A, maxWithdrawable: 21000}},
-    {name: 'no k1', body: {tag: 'withdrawRequest', callback: CB, maxWithdrawable: 21000}},
-    {name: 'no maxWithdrawable', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A}},
-    {name: 'maxWithdrawable is a string', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: '21000'}},
-    {name: 'negative maxWithdrawable', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: -1}},
+    {name: 'wrong tag', body: {tag: 'payRequest', callback: CB, k1: K1_A, maxWithdrawable: 21000, mintPubkey: MINT_PUB}},
+    {name: 'no callback', body: {tag: 'withdrawRequest', k1: K1_A, maxWithdrawable: 21000, mintPubkey: MINT_PUB}},
+    {name: 'no k1', body: {tag: 'withdrawRequest', callback: CB, maxWithdrawable: 21000, mintPubkey: MINT_PUB}},
+    {name: 'no maxWithdrawable', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, mintPubkey: MINT_PUB}},
+    {name: 'maxWithdrawable is a string', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: '21000', mintPubkey: MINT_PUB}},
+    {name: 'negative maxWithdrawable', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: -1, mintPubkey: MINT_PUB}},
     {
       name: 'fractional maxWithdrawable',
-      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 21000.5},
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 21000.5, mintPubkey: MINT_PUB},
       why: 'msat are integers'
     },
     {
       name: 'maxWithdrawable past 2^63',
-      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 2 ** 64},
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 2 ** 64, mintPubkey: MINT_PUB},
       why: 'no common integer type holds it and a double rounds it - refuse rather than guess the amount'
     },
-    {name: 'minWithdrawable above maxWithdrawable', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, minWithdrawable: 30000, maxWithdrawable: 21000}},
+    {name: 'minWithdrawable above maxWithdrawable', body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, minWithdrawable: 30000, maxWithdrawable: 21000, mintPubkey: MINT_PUB}},
     {
       name: 'echoed a different k1 than queried',
-      body: {tag: 'withdrawRequest', callback: CB, k1: K1_B, maxWithdrawable: 21000},
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_B, maxWithdrawable: 21000, mintPubkey: MINT_PUB},
       why: 'spec MUST: the response k1 is the bearer secret itself. A SERVICE returning something else is non-compliant, or the note was rotated by someone else'
+    },
+    {
+      name: 'no mintPubkey',
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, minWithdrawable: 0, maxWithdrawable: 21000},
+      why: 'offline verification is mandatory. Without the key a note signature verifies against nothing, and whoever is handed the note is back to the leap of faith the signature exists to remove'
+    },
+    {
+      name: 'mintPubkey that is not a compressed secp256k1 key',
+      body: {tag: 'withdrawRequest', callback: CB, k1: K1_A, maxWithdrawable: 21000, mintPubkey: MINT_PUB.slice(2)},
+      why: 'an x-only key, a node URI or a truncated hex string verifies nothing. Refused at the response rather than at the first signature check, where the same fault would look like a forged note'
     }
   ]
 }

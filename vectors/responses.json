@@ -1,9 +1,10 @@
 {
   "version": 1,
   "spec": "LUD-25 draft (lnurl/luds#301)",
-  "description": "Classifying a SERVICE response. The distinction that matters for funds is definitive-rejection versus ambiguous-outcome: a parsed {\"status\":\"ERROR\"} means the request was processed and refused, while a transport failure, an unparseable body, or a 200 that does not confirm means the mutation MAY have landed - and for rotate/split/merge the WALLET-generated secrets are then the only copy of the outputs, so they must ride the error rather than be discarded.",
+  "description": "Classifying a SERVICE response. The distinction that matters for funds is definitive-rejection versus ambiguous-outcome: a parsed {\"status\":\"ERROR\"} means the request was processed and refused, while a transport failure, an unparseable body, or a 200 that does not confirm means the mutation MAY have landed - and for rotate/split/merge the WALLET-generated secrets are then the only copy of the outputs, so they must ride the error rather than be discarded. A confirmed mutation carrying no signature is its own outcome: it definitely landed, so the secrets matter more than ever, and the SERVICE is non-conforming. `op` says which call each case is driven through - a melt is the one mutation with no signature to return.",
   "outcomes": {
     "ok": "the operation is confirmed",
+    "unverifiable": "the mutation is confirmed but carries no signature. LUD-25 requires one on every rotate, split and merge, so this SERVICE is non-conforming - but the note EXISTS at the hash the WALLET disclosed, and its secret is the only key to that value. Keep the secret; report the mint",
     "pending": "this k1 has another operation in flight (a melt); retry shortly",
     "spent": "the SERVICE is authoritative that the note is already burned; a holder may lock it as spent",
     "unknown": "the SERVICE does not recognise this note; surface it, do not silently lock it",
@@ -13,14 +14,17 @@
   "cases": [
     {
       "name": "plain success",
+      "op": "mutation",
       "http": 200,
       "body": {
         "status": "OK"
       },
-      "expect": "ok"
+      "expect": "unverifiable",
+      "why": "a bare OK was a conforming rotate answer while offline verification was optional. It is not one now: the note is real and the WALLET must keep its secret, but nobody the holder hands it to can check it"
     },
     {
       "name": "success with an offline-verification signature",
+      "op": "mutation",
       "http": 200,
       "body": {
         "status": "OK",
@@ -31,6 +35,7 @@
     },
     {
       "name": "split success with both signatures",
+      "op": "split",
       "http": 200,
       "body": {
         "status": "OK",
@@ -42,7 +47,19 @@
       "changeSignature": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
     },
     {
+      "name": "a split that signs only its first output",
+      "op": "split",
+      "http": 200,
+      "body": {
+        "status": "OK",
+        "sig": "ababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
+      },
+      "expect": "unverifiable",
+      "why": "both outputs of a split are notes and both need a signature; the change is not a lesser note"
+    },
+    {
       "name": "melt success with a LUD-21 style proof",
+      "op": "melt",
       "http": 200,
       "body": {
         "status": "OK",
@@ -50,10 +67,11 @@
         "verify": "https://mint.example/verify/abc"
       },
       "expect": "ok",
-      "why": "OK on a melt means the payment is in flight, NOT that the note is confirmed spent"
+      "why": "OK on a melt means the payment is in flight, NOT that the note is confirmed spent. A melt mints nothing, so it has no signature to return and none is required"
     },
     {
       "name": "pending",
+      "op": "mutation",
       "http": 200,
       "body": {
         "status": "ERROR",
@@ -64,6 +82,7 @@
     },
     {
       "name": "already spent",
+      "op": "mutation",
       "http": 200,
       "body": {
         "status": "ERROR",
@@ -73,6 +92,7 @@
     },
     {
       "name": "unknown note",
+      "op": "mutation",
       "http": 200,
       "body": {
         "status": "ERROR",
@@ -82,6 +102,7 @@
     },
     {
       "name": "not found wording",
+      "op": "mutation",
       "http": 200,
       "body": {
         "status": "ERROR",
@@ -91,6 +112,7 @@
     },
     {
       "name": "ambiguous callback wording is treated as spent",
+      "op": "mutation",
       "http": 200,
       "body": {
         "status": "ERROR",
@@ -101,6 +123,7 @@
     },
     {
       "name": "some other refusal",
+      "op": "mutation",
       "http": 200,
       "body": {
         "status": "ERROR",
@@ -110,6 +133,7 @@
     },
     {
       "name": "error with no reason",
+      "op": "mutation",
       "http": 200,
       "body": {
         "status": "ERROR"
@@ -118,6 +142,7 @@
     },
     {
       "name": "200 with neither OK nor ERROR",
+      "op": "mutation",
       "http": 200,
       "body": {
         "something": "else"
@@ -127,23 +152,27 @@
     },
     {
       "name": "unparseable body",
+      "op": "mutation",
       "http": 200,
       "bodyRaw": "not json at all",
       "expect": "ambiguous"
     },
     {
       "name": "server error",
+      "op": "mutation",
       "http": 500,
       "bodyRaw": "upstream failure",
       "expect": "ambiguous"
     },
     {
       "name": "transport failure",
+      "op": "mutation",
       "transportError": true,
       "expect": "ambiguous"
     },
     {
       "name": "timeout",
+      "op": "mutation",
       "timeout": true,
       "expect": "ambiguous"
     }

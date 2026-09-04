@@ -25,6 +25,26 @@ The signature vectors now describe `mintPubkey` as a stable SERVICE key. It may
 be the funding node identity where compatible signing exists, or a dedicated,
 persistent secp256k1 key where it does not.
 
+**The client-facing vectors carry the same MUSTs.** They had been left behind
+by the prose, still describing a signature as one accepted shape among
+several, so a wallet library could pass every vector while ignoring the
+requirement entirely.
+
+`withdraw-info.json` now puts `mintPubkey` on every accepted withdrawRequest
+and rejects a response that omits it or publishes something that is not a
+33-byte compressed secp256k1 key. A wallet handed a note by a mint that
+publishes no key has nothing to verify it against, which is the gap offline
+verification exists to close.
+
+`responses.json` gains an `unverifiable` outcome for a mutation the SERVICE
+confirms but does not sign. It is deliberately not folded into the existing
+`error` or `ambiguous` outcomes: the mutation definitely landed, so the
+wallet-generated secret is the only key to a real note and must be kept, and
+a consumer that treats this as an ordinary failure loses the money it is
+trying to protect. Every case now also declares the `op` it is driven
+through, because a melt mints nothing and so needs no signature, while a
+rotate returning none is the new outcome.
+
 **The mock mint starts when its path reaches it through a symlink.** The
 standalone guard compared `import.meta.url` against `file://` plus
 `process.argv[1]`, and node resolves a module's URL to its real path while
